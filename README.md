@@ -159,4 +159,4 @@ src/claude_repath/
 
 ## License
 
-MIT © 2026 Peip
+MIT

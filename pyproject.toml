@@ -1,0 +1,61 @@
+[project]
+name = "claude-repath"
+version = "0.1.0"
+description = "Migrate Claude Code project state when your project folder moves — rewires cwd paths across sessions, ~/.claude.json, and worktrees."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "xPeiPeix", email = "42157266+xPeiPeix@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+keywords = ["claude-code", "anthropic", "cli", "migration", "devtools", "project"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "typer>=0.12.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/xPeiPeix/claude-repath"
+Repository = "https://github.com/xPeiPeix/claude-repath"
+Issues = "https://github.com/xPeiPeix/claude-repath/issues"
+
+[project.scripts]
+claude-repath = "claude_repath.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-v", "--strict-markers", "--tb=short"]

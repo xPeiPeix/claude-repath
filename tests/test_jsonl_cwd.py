@@ -44,11 +44,19 @@ def fake_claude(tmp_path: Path):
         encoding="utf-8",
     )
 
-    # Totally unrelated project.
+    # Totally unrelated project whose OWN cwd never matches.
     other = projects / "D--dev-code-other"
     other.mkdir()
     (other / "s.jsonl").write_text(
         json.dumps({"cwd": r"D:\dev_code\other"}) + "\n", encoding="utf-8"
+    )
+
+    # Cross-project reference: another unrelated project whose jsonl happens
+    # to MENTION the old path (simulates a Bash tool call cd'd into it).
+    xref = projects / "D--dev-code-xref"
+    xref.mkdir()
+    (xref / "s.jsonl").write_text(
+        json.dumps({"cwd": r"D:\dev_code\time-blocks\sub"}) + "\n", encoding="utf-8"
     )
 
     return claude_home
@@ -146,3 +154,66 @@ class TestApply:
         )
         session = start_backup(tmp_path / "backups")
         assert jsonl_cwd.apply(ctx, session) == []
+
+
+class TestScope:
+    def test_narrow_default_skips_cross_project_refs(
+        self, tmp_path: Path, fake_claude: Path
+    ):
+        ctx = _ctx(fake_claude)  # default scope = "narrow"
+        session = start_backup(tmp_path / "backups")
+
+        changes = jsonl_cwd.apply(ctx, session)
+
+        # Only main + worktree should be touched. The cross-ref jsonl
+        # under D--dev-code-xref must stay untouched.
+        xref_s = (
+            fake_claude / "projects" / "D--dev-code-xref" / "s.jsonl"
+        ).read_text(encoding="utf-8")
+        assert json.loads(xref_s.strip())["cwd"] == r"D:\dev_code\time-blocks\sub"
+        assert not any("xref" in c for c in changes)
+
+    def test_broad_includes_cross_project_refs(
+        self, tmp_path: Path, fake_claude: Path
+    ):
+        ctx = MigrationContext(
+            old_path=r"D:\dev_code\time-blocks",
+            new_path=r"D:\dev_code\Life\time-blocks",
+            claude_home=fake_claude,
+            scope="broad",
+        )
+        session = start_backup(tmp_path / "backups")
+
+        changes = jsonl_cwd.apply(ctx, session)
+
+        # broad mode: the xref jsonl IS touched.
+        xref_s = (
+            fake_claude / "projects" / "D--dev-code-xref" / "s.jsonl"
+        ).read_text(encoding="utf-8")
+        assert (
+            json.loads(xref_s.strip())["cwd"]
+            == r"D:\dev_code\Life\time-blocks\sub"
+        )
+        assert any("xref" in c for c in changes)
+
+    def test_scan_dirs_narrow_picks_old_and_new_encoding(self, tmp_path: Path):
+        claude_home = tmp_path / "claude"
+        projects = claude_home / "projects"
+        projects.mkdir(parents=True)
+        # Simulate: layer 2 already renamed some dirs to new encoding
+        (projects / "D--dev-code-time-blocks").mkdir()
+        (projects / "D--dev-code-Life-time-blocks").mkdir()
+        (projects / "D--dev-code-Life-time-blocks--claude-worktrees-feat").mkdir()
+        (projects / "D--other").mkdir()
+
+        ctx = MigrationContext(
+            old_path=r"D:\dev_code\time-blocks",
+            new_path=r"D:\dev_code\Life\time-blocks",
+            claude_home=claude_home,
+            scope="narrow",
+        )
+        names = {p.name for p in jsonl_cwd._scan_dirs(ctx)}
+        assert "D--dev-code-time-blocks" in names
+        assert "D--dev-code-Life-time-blocks" in names
+        assert "D--dev-code-Life-time-blocks--claude-worktrees-feat" in names
+        assert "D--other" not in names

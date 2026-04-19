@@ -99,9 +99,18 @@ def move_cmd(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the interactive confirmation"
     ),
+    scope: str = typer.Option(
+        "narrow",
+        "--scope",
+        help="jsonl scan scope: 'narrow' (main + worktrees, safer default) "
+        "or 'broad' (every project dir; rewrites cross-project references)",
+    ),
 ) -> None:
     """Move a project folder and rewire Claude Code state in one shot."""
-    ctx = MigrationContext(old_path=old_path, new_path=new_path)
+    if scope not in {"narrow", "broad"}:
+        console.print(f"[red]✗ invalid --scope {scope!r}; expected 'narrow' or 'broad'[/red]")
+        raise typer.Exit(code=2)
+    ctx = MigrationContext(old_path=old_path, new_path=new_path, scope=scope)
     plan = plan_migration(ctx)
 
     console.rule("[bold]Migration Plan[/bold]")
@@ -143,11 +152,16 @@ def rewire_cmd(
     new_path: str = typer.Argument(...),
     dry_run: bool = typer.Option(False, "--dry-run", "-n"),
     yes: bool = typer.Option(False, "--yes", "-y"),
+    scope: str = typer.Option("narrow", "--scope"),
 ) -> None:
     """Rewire state only — assume the project folder was already moved."""
-    # Same as `move --no-move`; implemented by delegating.
     move_cmd(
-        old_path=old_path, new_path=new_path, dry_run=dry_run, no_move=True, yes=yes
+        old_path=old_path,
+        new_path=new_path,
+        dry_run=dry_run,
+        no_move=True,
+        yes=yes,
+        scope=scope,
     )
 
 

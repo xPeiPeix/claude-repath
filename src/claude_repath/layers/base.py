@@ -11,11 +11,15 @@ class MigrationContext:
     """Parameters passed to every layer's ``plan`` / ``apply`` function.
 
     ``claude_home`` defaults to ``~/.claude`` but is overridable for tests.
+    ``scope`` controls jsonl rewrite breadth: ``"narrow"`` (default, safer)
+    scans only the main project and its worktrees; ``"broad"`` scans every
+    project directory and will rewrite any cross-project path references.
     """
 
     old_path: str
     new_path: str
     claude_home: Path = field(default_factory=lambda: Path.home() / ".claude")
+    scope: str = "narrow"
 
     @property
     def projects_dir(self) -> Path:

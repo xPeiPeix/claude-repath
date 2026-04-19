@@ -178,16 +178,21 @@ def doctor_cmd(
     )
 
     gj = ctx.global_json_path
-    found_in_global = False
+    found_key: str | None = None
     if gj.is_file():
         import json
         data = json.loads(gj.read_text(encoding="utf-8"))
         projects = data.get("projects") or {}
-        found_in_global = path in projects
+        # Match either exactly or by separator-style variant, since real
+        # ~/.claude.json stores keys with forward slashes even on Windows.
+        for candidate in (path, path.replace("\\", "/"), path.replace("/", "\\")):
+            if candidate in projects:
+                found_key = candidate
+                break
     table.add_row(
         "~/.claude.json projects key",
-        "[green]✓[/green]" if found_in_global else "[yellow]not listed[/yellow]",
-        str(gj),
+        "[green]✓[/green]" if found_key else "[yellow]not listed[/yellow]",
+        found_key or str(gj),
     )
 
     console.print(table)

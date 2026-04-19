@@ -222,6 +222,17 @@ def doctor_cmd(
         found_key or str(gj),
     )
 
+    # Desktop (Chromium) Local Storage — read-only diagnostic, not migrated.
+    from .platform_paths import desktop_local_storage_dir, platform_label
+    desktop = desktop_local_storage_dir()
+    desktop_status = (
+        "[yellow]present (not auto-migrated)[/yellow]"
+        if desktop
+        else "[dim]not detected[/dim]"
+    )
+    desktop_detail = str(desktop) if desktop else f"no Claude Desktop data on {platform_label()}"
+    table.add_row("Desktop Local Storage", desktop_status, desktop_detail)
+
     console.print(table)
 
 

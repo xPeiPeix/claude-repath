@@ -10,6 +10,7 @@ real absolute path the project was opened at, captured at runtime.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import questionary
@@ -84,11 +85,16 @@ def _find_cwd(obj: object, max_depth: int = 3) -> str | None:
     return None
 
 
+def _notify(message: str) -> None:
+    """Emit a status message that works in both TTY and non-TTY contexts."""
+    print(message, file=sys.stderr)
+
+
 def pick_project(projects_dir: Path) -> str | None:
     """Interactive: show project list, return chosen project's cwd or ``None``."""
     entries = discover_projects(projects_dir)
     if not entries:
-        questionary.print(f"No projects found under {projects_dir}", style="bold yellow")
+        _notify(f"No projects found under {projects_dir}")
         return None
     choices = [
         questionary.Choice(
@@ -128,7 +134,7 @@ def run_interactive_move(projects_dir: Path) -> tuple[str, str] | None:
     if not new:
         return None
     if new == old:
-        questionary.print("New path is identical to old — nothing to migrate.", style="yellow")
+        _notify("New path is identical to old — nothing to migrate.")
         return None
     if not confirm(f"Migrate\n  {old}\n→ {new}\n?", default=True):
         return None

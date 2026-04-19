@@ -1,6 +1,7 @@
 """Tests for :mod:`claude_repath.tui` (pure/offline functions only).
 
-The interactive questionary parts are not tested here — they require a TTY.
+The questionary prompts themselves require a TTY; we exercise the glue
+(:func:`run_interactive_move`) by monkeypatching the prompt helpers.
 """
 
 from __future__ import annotations
@@ -8,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from claude_repath import tui
 from claude_repath.tui import _extract_cwd_from_sessions, _find_cwd, discover_projects
 
 
@@ -137,3 +139,36 @@ class TestDiscoverProjects:
         assert len(result) == 1
         _folder, _cwd, n = result[0]
         assert n == 3
+
+
+class TestRunInteractiveMove:
+    """Monkeypatches the three prompt helpers to simulate user interaction."""
+
+    def test_cancel_at_pick_returns_none(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setattr(tui, "pick_project", lambda _: None)
+        assert tui.run_interactive_move(tmp_path) is None
+
+    def test_cancel_at_new_path_returns_none(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda default: None)
+        assert tui.run_interactive_move(tmp_path) is None
+
+    def test_identity_path_rejected(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\same")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda default: r"D:\same")
+        # confirm shouldn't even be reached, but stub anyway.
+        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        assert tui.run_interactive_move(tmp_path) is None
+
+    def test_cancel_at_confirm_returns_none(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda default: r"D:\new")
+        monkeypatch.setattr(tui, "confirm", lambda *a, **k: False)
+        assert tui.run_interactive_move(tmp_path) is None
+
+    def test_happy_path_returns_tuple(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda default: r"D:\new")
+        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        result = tui.run_interactive_move(tmp_path)
+        assert result == (r"D:\old", r"D:\new")

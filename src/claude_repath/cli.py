@@ -88,8 +88,8 @@ def _warn_running_claude() -> None:
 
 @app.command("move")
 def move_cmd(
-    old_path: str = typer.Argument(..., help="Current absolute project path"),
-    new_path: str = typer.Argument(..., help="Desired new absolute project path"),
+    old_path: str = typer.Argument(None, help="Current absolute project path"),
+    new_path: str = typer.Argument(None, help="Desired new absolute project path"),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show planned changes without applying"
     ),
@@ -106,10 +106,23 @@ def move_cmd(
         "or 'broad' (every project dir; rewrites cross-project references)",
     ),
 ) -> None:
-    """Move a project folder and rewire Claude Code state in one shot."""
+    """Move a project folder and rewire Claude Code state in one shot.
+
+    Run without arguments to launch an interactive project picker (TUI).
+    """
     if scope not in {"narrow", "broad"}:
         console.print(f"[red]✗ invalid --scope {scope!r}; expected 'narrow' or 'broad'[/red]")
         raise typer.Exit(code=2)
+
+    if old_path is None or new_path is None:
+        from .tui import run_interactive_move
+        default_projects = Path.home() / ".claude" / "projects"
+        chosen = run_interactive_move(default_projects)
+        if chosen is None:
+            console.print("[yellow]cancelled[/yellow]")
+            raise typer.Abort()
+        old_path, new_path = chosen
+
     ctx = MigrationContext(old_path=old_path, new_path=new_path, scope=scope)
     plan = plan_migration(ctx)
 

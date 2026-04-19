@@ -25,13 +25,19 @@ Anthropic has no official migration command (as of 2026-04), and existing commun
 # Install (coming soon via PyPI)
 pip install claude-repath
 
-# Preview what would change — ALWAYS run this first
+# INTERACTIVE mode — pick from a list, no path typing needed
+claude-repath move
+
+# Explicit mode — preview changes first (ALWAYS recommended)
 claude-repath move D:\dev_code\time-blocks D:\dev_code\Life\time-blocks --dry-run
 
 # Actually perform the migration (auto-backs-up first)
 claude-repath move D:\dev_code\time-blocks D:\dev_code\Life\time-blocks
 
-# If you already moved the folder manually, just rewire state:
+# Broader scan — also rewrite cross-project references (use with care)
+claude-repath move <old> <new> --scope broad
+
+# If you already moved the folder manually, just rewire state
 claude-repath rewire D:\dev_code\time-blocks D:\dev_code\Life\time-blocks
 
 # Health check a project's Claude Code state
@@ -39,6 +45,9 @@ claude-repath doctor D:\dev_code\time-blocks
 
 # List all projects Claude Code knows about
 claude-repath list
+
+# Roll back a previous migration
+claude-repath rollback 20260419-155331
 ```
 
 ---
@@ -53,7 +62,7 @@ claude-repath list
 | 4 | `~/.claude.json` — `projects` key | ✅ |
 | 5 | Worktree-derived project folders (auto-discovered) | ✅ |
 | 6 | `~/.claude/git-worktrees.json` (if present) | ✅ |
-| 7 | Chromium `Local Storage/leveldb` entries | ⏳ v0.2 |
+| 7 | Chromium `Local Storage/leveldb` entries (Desktop app) | ⏳ v0.3+ backlog |
 
 ---
 
@@ -68,11 +77,22 @@ claude-repath list
 
 ## Platform support
 
-Tested on:
-- Windows 11 (Git Bash, PowerShell, cmd)
-- macOS / Linux (POSIX)
+| OS | CLI state (`~/.claude/`) | Desktop state (`Local Storage/leveldb`) |
+|---|:---:|:---:|
+| **Windows** 11 (Git Bash / PowerShell / cmd) | ✅ auto-migrated | 🔍 diagnosed |
+| **macOS** | ✅ auto-migrated | 🔍 diagnosed |
+| **Linux** | ✅ auto-migrated | 🔍 diagnosed |
 
-Windows paths with drive letters (`D:\...`) and backslashes are first-class — they were the primary motivation for writing this tool.
+Windows paths with drive letters (`D:\...`) and backslashes are first-class — they were the primary motivation for writing this tool. The path matcher accepts both `\` and `/` separators and automatically aligns with `~/.claude.json`'s forward-slash-stored keys.
+
+### About Claude Code **Desktop**
+
+Claude Code Desktop stores additional session state in Chromium's Local Storage LevelDB:
+- Windows: `%LOCALAPPDATA%\claude\Local Storage\leveldb\`
+- macOS: `~/Library/Application Support/claude/Local Storage/leveldb/`
+- Linux: `~/.config/claude/Local Storage/leveldb/`
+
+`claude-repath doctor` reports whether this directory exists on your machine but does **not** migrate it automatically — see [Roadmap](#roadmap) for planned v0.3+ support. If you use Desktop exclusively and move a project, the Desktop UI's "recent projects" list may show a stale path. Remedy: open the new folder via Desktop's File menu to re-register it.
 
 ---
 
@@ -132,10 +152,8 @@ src/claude_repath/
 
 ## Roadmap
 
-- **v0.2** — Chromium `Local Storage/leveldb` layer (`cc-session-cwd-local_*`)
-  — requires closing Claude first + `classic-level` bindings
-- **v0.3** — interactive TUI picker for `rollback` / `doctor`
-- **v0.4** — shell-completion auto-install (typer's built-in)
+- **v0.2 (current)** — Interactive TUI picker, `--scope narrow|broad` flag, Desktop Local Storage diagnostic, cross-platform path handling (Win/macOS/Linux)
+- **v0.3+ (backlog)** — Chromium `Local Storage/leveldb` auto-migration for Claude Code Desktop users (requires closing Desktop first + `plyvel-ci` bindings + META-protobuf maintenance); interactive TUI variants for `rollback` / `doctor`; shell-completion auto-install (typer's built-in)
 
 ---
 

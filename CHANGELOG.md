@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-19
+
+### Added
+
+- **`--scope narrow|broad`** flag on `move` / `rewire`. Default `narrow` scans
+  only the main project and its worktrees (safe); `broad` scans every project
+  directory and rewrites cross-project path references.
+- **Interactive TUI picker** powered by `questionary`: running
+  `claude-repath move` with no arguments lists known projects (real cwd
+  extracted from each project's session `.jsonl`), prompts for the new path,
+  and confirms. No need to remember encoded folder names.
+- **Desktop Local Storage diagnostic** in `doctor`: reports whether Claude
+  Code Desktop's Chromium `leveldb/` directory is present on the current OS
+  (Win/macOS/Linux). Read-only — auto-migration deferred to v0.3+ backlog.
+- **Cross-platform `platform_paths` module**: resolves the Desktop data
+  directory for Windows / macOS / Linux (and `cygwin`).
+- 35 new pytest cases (107 total) covering scope filtering, TUI interaction
+  flow, and platform path detection.
+
+### Changed
+
+- `doctor`'s `~/.claude.json projects key` check now tolerates path-separator
+  differences — a user-supplied `D:\foo` now matches stored `D:/foo`.
+
 ## [0.1.0] — 2026-04-19
 
 ### Added

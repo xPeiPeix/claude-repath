@@ -22,8 +22,11 @@ Anthropic has no official migration command (as of 2026-04), and existing commun
 ## Quick start
 
 ```bash
-# Install (coming soon via PyPI)
+# Install
 pip install claude-repath
+
+# Or run without installing (requires uv)
+uvx --from claude-repath claude-repath --help
 
 # INTERACTIVE mode — pick from a list, no path typing needed
 claude-repath move

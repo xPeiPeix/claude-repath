@@ -271,7 +271,11 @@ class TestPromptNewPath:
 
         monkeypatch.setattr(q, "path", lambda *a, **k: _P())
         monkeypatch.setattr(q, "text", fake_text)
-        tui.prompt_new_path(r"D:\projects\original-name")
+        # Use a cross-platform path literal — a hard-coded "D:\..." string
+        # parses differently on POSIX (whole string treated as the name)
+        # vs Windows (drive letter → real parent/name split).
+        old_path = tmp_path / "projects" / "original-name"
+        tui.prompt_new_path(str(old_path))
         assert captured["default"] == "original-name"
 
     def test_cancel_parent_returns_none(self, monkeypatch, tmp_path: Path):

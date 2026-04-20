@@ -90,7 +90,11 @@ def move_project_folder(old_path: str, new_path: str) -> None:
 
 
 def detect_claude_processes() -> list[int]:
-    """Return PIDs of running ``claude`` processes (Node CLI). Best-effort.
+    """Return PIDs of running Claude Code CLI processes. Best-effort.
+
+    Excludes this tool's own process — ``pgrep -f claude`` would otherwise
+    match any command line containing "claude", including ``claude-repath``
+    itself, producing a misleading "running claude detected" warning.
 
     Returns an empty list on systems where the check can't run, rather than
     raising — this is a soft safety check, not a hard gate.
@@ -98,7 +102,7 @@ def detect_claude_processes() -> list[int]:
     if sys.platform.startswith("win"):
         cmd = ["tasklist", "/fi", "imagename eq claude.exe", "/fo", "csv", "/nh"]
     else:
-        cmd = ["pgrep", "-f", "claude"]
+        cmd = ["pgrep", "-af", "claude"]
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=5, check=False
@@ -115,9 +119,14 @@ def detect_claude_processes() -> list[int]:
                 except ValueError:
                     pass
     else:
+        # pgrep -af emits "PID full-cmdline"; filter out lines whose cmdline
+        # clearly belongs to this tool (or uv-tool/pipx wrappers for it).
         for line in result.stdout.splitlines():
+            pid_str, _, cmdline = line.partition(" ")
+            if "claude-repath" in cmdline:
+                continue
             try:
-                pids.append(int(line.strip()))
+                pids.append(int(pid_str))
             except ValueError:
                 pass
     return pids

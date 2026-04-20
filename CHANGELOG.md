@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-21
+
+### Fixed
+
+- `detect_claude_processes` (the soft check that warns when a Claude Code
+  session is running) no longer flags `claude-repath` **itself** as a
+  running claude process. The POSIX path used `pgrep -f claude`, which
+  matched any command line containing the substring "claude" — including
+  this tool's own PID — producing a spurious red `⚠ WARNING` at every
+  apply. Fix: switch to `pgrep -af` (cmdline included) and skip entries
+  whose cmdline contains "claude-repath".
+
+### Added
+
+- **Demo assets committed**: `demo.gif` (219 KB) + `demo.mp4` (183 KB),
+  rendered end-to-end with [vhs](https://github.com/charmbracelet/vhs).
+  README now embeds the GIF right under the tagline so first-time visitors
+  see the wizard in action before reading a single word of prose.
+- **Reproducible demo pipeline**: `demo.tape` + `setup-demo.sh` check
+  into the repo. On any clean Linux box (including CI runners),
+  `bash setup-demo.sh && vhs demo.tape` rebuilds `demo.gif` + `demo.mp4`
+  from scratch. The setup script resets and mocks a minimal Claude state
+  at `/tmp/workspace/time-blocks`, so running it is idempotent and never
+  touches a user's real data.
+- 3 new pytest cases covering the pgrep filter (119 total).
+
 ## [0.3.0] — 2026-04-20
 
 ### Added
@@ -83,7 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xPeiPeix/claude-repath/releases/tag/v0.1.0

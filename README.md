@@ -8,6 +8,8 @@
 
 > Rewire Claude Code's local state when your project folder moves.
 
+![claude-repath v0.3 wizard demo](./demo.gif)
+
 When you move or rename a project directory, Claude Code loses track of its sessions, memory, todos, and worktrees — because the absolute path is hardcoded in **four** different places. `claude-repath` patches all of them in one shot.
 
 ---

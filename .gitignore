@@ -36,3 +36,7 @@ desktop.ini
 # Claude Code local session metadata (ralph-loop, etc.)
 .claude/*.local.md
 .claude/*.local.json
+
+# Playwright-cli snapshots & ad-hoc screenshots
+.playwright-cli/
+pypi-form-filled.png

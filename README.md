@@ -4,7 +4,6 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/claude-repath.svg)](https://pypi.org/project/claude-repath/)
 [![CI](https://github.com/xPeiPeix/claude-repath/actions/workflows/ci.yml/badge.svg)](https://github.com/xPeiPeix/claude-repath/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Downloads](https://static.pepy.tech/badge/claude-repath)](https://pepy.tech/project/claude-repath)
 
 > Rewire Claude Code's local state when your project folder moves.
 

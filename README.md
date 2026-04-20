@@ -19,15 +19,23 @@ Anthropic has no official migration command (as of 2026-04), and existing commun
 
 ---
 
+## Install
+
+Pick whichever matches your workflow — they're all equivalent:
+
+| Method | Command | When to use |
+|---|---|---|
+| **uvx** (zero-install) | `uvx --from claude-repath claude-repath <subcommand>` | Try or use without installing — `uv` caches it transparently |
+| **pipx** (global CLI) | `pipx install claude-repath` | Daily use, isolated from system Python |
+| **pip** (in a venv) | `pip install claude-repath` | Already inside a project venv |
+
+> 💡 **First time?** Run `uvx --from claude-repath claude-repath --version` — no commitment, just see if it works on your box. Upgrade later with `uvx --refresh …`.
+
+---
+
 ## Quick start
 
 ```bash
-# Install
-pip install claude-repath
-
-# Or run without installing (requires uv)
-uvx --from claude-repath claude-repath --help
-
 # INTERACTIVE mode — pick from a list, no path typing needed
 claude-repath move
 
@@ -65,7 +73,7 @@ claude-repath rollback 20260419-155331
 | 4 | `~/.claude.json` — `projects` key | ✅ |
 | 5 | Worktree-derived project folders (auto-discovered) | ✅ |
 | 6 | `~/.claude/git-worktrees.json` (if present) | ✅ |
-| 7 | Chromium `Local Storage/leveldb` entries (Desktop app) | ⏳ v0.3+ backlog |
+| 7 | Chromium `Local Storage/leveldb` entries (Desktop app) | ⏳ v0.4+ backlog |
 
 ---
 

@@ -155,8 +155,9 @@ src/claude_repath/
 
 ## Roadmap
 
-- **v0.2 (current)** — Interactive TUI picker, `--scope narrow|broad` flag, Desktop Local Storage diagnostic, cross-platform path handling (Win/macOS/Linux)
-- **v0.3+ (backlog)** — Chromium `Local Storage/leveldb` auto-migration for Claude Code Desktop users (requires closing Desktop first + `plyvel-ci` bindings + META-protobuf maintenance); interactive TUI variants for `rollback` / `doctor`; shell-completion auto-install (typer's built-in)
+- **v0.3 (current)** — Wizard-style TUI with three-step flow (pick / locate / preview), two-stage path input (parent directory + project name) with Tab-completion, per-layer change counts in a Rich preview panel, and a live spinner during apply.
+- **v0.2** — Interactive TUI picker, `--scope narrow|broad` flag, Desktop Local Storage diagnostic, cross-platform path handling (Win/macOS/Linux).
+- **v0.4+ (backlog)** — Chromium `Local Storage/leveldb` auto-migration for Claude Code Desktop users (requires closing Desktop first + `plyvel-ci` bindings + META-protobuf maintenance); interactive TUI variants for `rollback` / `doctor`; shell-completion auto-install (typer's built-in).
 
 ---
 

@@ -150,25 +150,179 @@ class TestRunInteractiveMove:
 
     def test_cancel_at_new_path_returns_none(self, monkeypatch, tmp_path: Path):
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
-        monkeypatch.setattr(tui, "prompt_new_path", lambda default: None)
+        monkeypatch.setattr(tui, "prompt_new_path", lambda _old: None)
         assert tui.run_interactive_move(tmp_path) is None
 
     def test_identity_path_rejected(self, monkeypatch, tmp_path: Path):
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\same")
-        monkeypatch.setattr(tui, "prompt_new_path", lambda default: r"D:\same")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\same")
         # confirm shouldn't even be reached, but stub anyway.
         monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
         assert tui.run_interactive_move(tmp_path) is None
 
     def test_cancel_at_confirm_returns_none(self, monkeypatch, tmp_path: Path):
+        from claude_repath.migrate import PlanReport
+
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
-        monkeypatch.setattr(tui, "prompt_new_path", lambda default: r"D:\new")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
+        monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
         monkeypatch.setattr(tui, "confirm", lambda *a, **k: False)
         assert tui.run_interactive_move(tmp_path) is None
 
     def test_happy_path_returns_tuple(self, monkeypatch, tmp_path: Path):
+        from claude_repath.migrate import PlanReport
+
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
-        monkeypatch.setattr(tui, "prompt_new_path", lambda default: r"D:\new")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
+        monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
         monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
         result = tui.run_interactive_move(tmp_path)
         assert result == (r"D:\old", r"D:\new")
+
+    def test_scope_passed_to_plan_migration(self, monkeypatch, tmp_path: Path):
+        """Step 3 should construct MigrationContext with the given scope."""
+        from claude_repath.migrate import PlanReport
+
+        captured: dict[str, object] = {}
+
+        def fake_plan(ctx):
+            captured["scope"] = ctx.scope
+            return PlanReport(entries=[])
+
+        monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
+        monkeypatch.setattr(tui, "plan_migration", fake_plan)
+        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        tui.run_interactive_move(tmp_path, scope="broad")
+        assert captured["scope"] == "broad"
+
+    def test_plan_failure_returns_none(self, monkeypatch, tmp_path: Path):
+        """If planning raises, the flow aborts gracefully without re-raising."""
+
+        def boom(_ctx):
+            raise RuntimeError("plan failed")
+
+        monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
+        monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
+        monkeypatch.setattr(tui, "plan_migration", boom)
+        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        assert tui.run_interactive_move(tmp_path) is None
+
+
+class TestPromptNewPath:
+    """Two-stage path input: parent directory + project name composition."""
+
+    def _stub(
+        self,
+        monkeypatch,
+        parent: str | None,
+        name: str | None,
+        create_parent: bool | None = True,
+    ) -> None:
+        """Replace questionary calls with deterministic answers."""
+
+        class _StubPath:
+            def __init__(self, val):
+                self._val = val
+
+            def ask(self):
+                return self._val
+
+        class _StubText(_StubPath):
+            pass
+
+        class _StubConfirm(_StubPath):
+            pass
+
+        import questionary as q
+
+        monkeypatch.setattr(q, "path", lambda *a, **k: _StubPath(parent))
+        monkeypatch.setattr(q, "text", lambda *a, **k: _StubText(name))
+        monkeypatch.setattr(q, "confirm", lambda *a, **k: _StubConfirm(create_parent))
+
+    def test_parent_and_name_joined(self, monkeypatch, tmp_path: Path):
+        # existing parent → no creation confirm needed
+        existing = tmp_path / "dest"
+        existing.mkdir()
+        self._stub(monkeypatch, parent=str(existing), name="proj")
+        out = tui.prompt_new_path(str(tmp_path / "oldparent" / "oldproj"))
+        assert out == str(existing / "proj")
+
+    def test_default_name_is_original(self, monkeypatch, tmp_path: Path):
+        """The name prompt should default to the old path's basename."""
+        captured: dict[str, str] = {}
+        existing = tmp_path / "dest"
+        existing.mkdir()
+        import questionary as q
+
+        class _P:
+            def ask(self):
+                return str(existing)
+
+        class _T:
+            def __init__(self, default):
+                captured["default"] = default
+
+            def ask(self):
+                return "renamed"
+
+        def fake_text(_msg, default=""):
+            return _T(default)
+
+        monkeypatch.setattr(q, "path", lambda *a, **k: _P())
+        monkeypatch.setattr(q, "text", fake_text)
+        tui.prompt_new_path(r"D:\projects\original-name")
+        assert captured["default"] == "original-name"
+
+    def test_cancel_parent_returns_none(self, monkeypatch, tmp_path: Path):
+        self._stub(monkeypatch, parent=None, name="x")
+        assert tui.prompt_new_path(str(tmp_path / "x")) is None
+
+    def test_cancel_name_returns_none(self, monkeypatch, tmp_path: Path):
+        existing = tmp_path / "dest"
+        existing.mkdir()
+        self._stub(monkeypatch, parent=str(existing), name=None)
+        assert tui.prompt_new_path(str(tmp_path / "x")) is None
+
+    def test_missing_parent_prompts_creation(self, monkeypatch, tmp_path: Path):
+        nonexistent = tmp_path / "does-not-exist-yet"
+        # User declines parent creation → returns None.
+        self._stub(
+            monkeypatch, parent=str(nonexistent), name="proj", create_parent=False
+        )
+        assert tui.prompt_new_path(str(tmp_path / "x")) is None
+
+    def test_missing_parent_accepted_returns_path(self, monkeypatch, tmp_path: Path):
+        nonexistent = tmp_path / "does-not-exist-yet"
+        self._stub(monkeypatch, parent=str(nonexistent), name="proj", create_parent=True)
+        out = tui.prompt_new_path(str(tmp_path / "old"))
+        # Path composed from nonexistent parent + name; real creation happens
+        # later in move_project_folder.
+        assert out == str(nonexistent / "proj")
+
+    def test_tilde_expansion(self, monkeypatch, tmp_path: Path):
+        """A ``~`` in the parent input should expand to the user's home."""
+        import questionary as q
+
+        class _P:
+            def ask(self):
+                return "~"
+
+        class _T:
+            def ask(self):
+                return "foo"
+
+        class _C:
+            def ask(self):
+                return True
+
+        monkeypatch.setattr(q, "path", lambda *a, **k: _P())
+        monkeypatch.setattr(q, "text", lambda *a, **k: _T())
+        monkeypatch.setattr(q, "confirm", lambda *a, **k: _C())
+
+        out = tui.prompt_new_path(r"D:\projects\original")
+        assert out is not None
+        # Result should start with the expanded home directory.
+        home = str(Path.home())
+        assert out.startswith(home)
+        assert out.endswith("foo")

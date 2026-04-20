@@ -1,4 +1,9 @@
-"""Interactive TUI for picking projects to migrate (questionary-based).
+"""Interactive TUI for picking projects to migrate (questionary + rich).
+
+v0.3 presents a three-step wizard:
+    Step 1/3  Pick a project
+    Step 2/3  Choose the new location (two-stage: parent + name)
+    Step 3/3  Review preview & confirm
 
 Because Claude Code's folder-name encoding is lossy (every non-alphanumeric
 character collapses to ``-``), we can't deterministically reverse an encoded
@@ -14,6 +19,15 @@ import sys
 from pathlib import Path
 
 import questionary
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from .layers.base import MigrationContext
+from .migrate import PlanReport, plan_migration
+
+_console = Console(stderr=True)
+STEPS_TOTAL = 3
 
 
 def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
@@ -32,7 +46,6 @@ def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
             continue
         cwd = _extract_cwd_from_sessions(sub)
         if cwd is None:
-            # Fall back: show encoded name so user can still pick & edit.
             cwd = f"<unknown: {sub.name}>"
         sessions = sum(1 for _ in sub.glob("*.jsonl"))
         out.append((sub, cwd, sessions))
@@ -40,11 +53,7 @@ def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
 
 
 def _extract_cwd_from_sessions(project_dir: Path) -> str | None:
-    """Read a representative cwd value from one of the project's jsonl files.
-
-    Tries newest files first so renamed paths aren't resurrected. Returns
-    ``None`` if no readable cwd was found.
-    """
+    """Read a representative cwd value from one of the project's jsonl files."""
     jsonls = sorted(project_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
     for jsonl in jsonls:
         try:
@@ -90,8 +99,28 @@ def _notify(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _step_banner(step: int, title: str, subtitle: str | None = None) -> None:
+    body = f"[bold]{title}[/bold]"
+    if subtitle:
+        body += f"\n[dim]{subtitle}[/dim]"
+    _console.print(
+        Panel(
+            body,
+            title=f"[cyan]Step {step}/{STEPS_TOTAL}[/cyan]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+
+def _help_bar(keys: list[tuple[str, str]]) -> None:
+    parts = [f"[bold cyan]{k}[/bold cyan] {d}" for k, d in keys]
+    _console.print("   " + "   ".join(parts), style="dim")
+
+
 def pick_project(projects_dir: Path) -> str | None:
-    """Interactive: show project list, return chosen project's cwd or ``None``."""
+    """Step 1/3: show project list, return chosen project's cwd or ``None``."""
+    _step_banner(1, "Pick a project to migrate")
     entries = discover_projects(projects_dir)
     if not entries:
         _notify(f"No projects found under {projects_dir}")
@@ -103,18 +132,60 @@ def pick_project(projects_dir: Path) -> str | None:
         )
         for _folder, cwd, n in entries
     ]
+    _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
     return questionary.select(
         "Which project do you want to relocate?",
         choices=choices,
     ).ask()
 
 
-def prompt_new_path(default: str = "") -> str | None:
-    """Ask for the new absolute path; returns None if cancelled."""
-    return questionary.text(
-        "New absolute path:",
-        default=default,
+def prompt_new_path(old_path: str) -> str | None:
+    """Step 2/3: two-stage input — parent directory + project name.
+
+    Returns a normalized absolute path as a string, or ``None`` if cancelled.
+    Path normalization (separators, ~ expansion) is done via ``pathlib.Path``;
+    the resulting string uses the host OS's native separator.
+    """
+    _step_banner(
+        2,
+        "Choose the new location",
+        subtitle=f"Moving from:  {old_path}",
+    )
+    _help_bar([("Tab", "complete"), ("Enter", "next"), ("Ctrl+C", "cancel")])
+
+    old = Path(old_path)
+    default_parent = str(old.parent)
+    default_name = old.name
+
+    parent_input = questionary.path(
+        "New parent directory:",
+        default=default_parent,
+        only_directories=True,
     ).ask()
+    if parent_input is None or not parent_input.strip():
+        return None
+
+    parent = Path(parent_input).expanduser()
+
+    name_input = questionary.text(
+        "New project name:",
+        default=default_name,
+    ).ask()
+    if name_input is None or not name_input.strip():
+        return None
+    name = name_input.strip()
+
+    new_path_abs = parent / name
+
+    if not parent.exists():
+        create = questionary.confirm(
+            f"Parent directory does not exist:\n  {parent}\nCreate it on apply?",
+            default=True,
+        ).ask()
+        if not create:
+            return None
+
+    return str(new_path_abs)
 
 
 def confirm(message: str, default: bool = False) -> bool:
@@ -122,20 +193,66 @@ def confirm(message: str, default: bool = False) -> bool:
     return bool(answer)
 
 
-def run_interactive_move(projects_dir: Path) -> tuple[str, str] | None:
-    """Full interactive flow: pick old project, enter new path, confirm.
+def _print_preview(old: str, new: str, plan: PlanReport) -> None:
+    """Render migration preview panel with per-layer change counts."""
+    table = Table(show_header=False, show_lines=False, padding=(0, 1), box=None)
+    table.add_column("Field", style="cyan", no_wrap=True)
+    table.add_column("Value")
 
-    Returns ``(old_path, new_path)`` or ``None`` if the user cancels anywhere.
+    table.add_row("From", old)
+    table.add_row("To", new)
+    table.add_row("", "")
+
+    for name, lines in plan.entries:
+        real = [ln for ln in lines if not ln.startswith(("[skip]", "[noop]"))]
+        if not real:
+            table.add_row(name, "[dim]no changes[/dim]")
+        else:
+            table.add_row(name, f"{len(real)} action(s)")
+
+    _console.print(
+        Panel(
+            table,
+            title="[bold]Migration Preview[/bold]",
+            subtitle=f"[dim]total: {plan.total_actions} actions[/dim]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+
+def run_interactive_move(
+    projects_dir: Path,
+    scope: str = "narrow",
+) -> tuple[str, str] | None:
+    """Full interactive flow: pick project → choose location → preview → confirm.
+
+    Returns ``(old_path, new_path)`` when the user confirms, or ``None`` if
+    they cancel anywhere. The preview in Step 3 calls ``plan_migration``
+    internally, so ``cli.py`` should skip re-printing the plan for TUI
+    sessions.
     """
     old = pick_project(projects_dir)
     if not old:
         return None
-    new = prompt_new_path(default=old)
+
+    new = prompt_new_path(old)
     if not new:
         return None
     if new == old:
         _notify("New path is identical to old — nothing to migrate.")
         return None
-    if not confirm(f"Migrate\n  {old}\n→ {new}\n?", default=True):
+
+    _step_banner(3, "Review & confirm")
+    ctx = MigrationContext(old_path=old, new_path=new, scope=scope)
+    try:
+        plan = plan_migration(ctx)
+    except Exception as exc:
+        _notify(f"Planning failed: {exc}")
+        return None
+    _print_preview(old, new, plan)
+    _help_bar([("Y", "proceed"), ("N", "cancel")])
+
+    if not confirm("Proceed with migration?", default=True):
         return None
     return old, new

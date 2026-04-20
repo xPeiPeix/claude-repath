@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-20
+
+### Added
+
+- **Wizard-style TUI** — `claude-repath move` now walks through three
+  clearly-labelled steps (pick project / new location / confirm) with
+  Rich-rendered banners and inline help bars instead of a flat prompt list.
+- **Two-stage path input** — new location entered as `parent directory`
+  (with filesystem Tab-completion) + `project name` (defaults to original
+  name, Enter to accept). Covers the two most common migration shapes:
+  rehoming under a new parent, and in-place renames.
+- **Step 3 preview panel** — before the final confirmation, a compact
+  summary panel shows the exact Before → After paths plus per-layer
+  change counts (folder, projects dir, jsonl cwd rewrites, worktrees,
+  global.json key) and the backup location.
+- **In-migration spinner** — `rich.status` shows live progress while
+  `apply_migration` runs, replacing the previous silent pause.
+
+### Changed
+
+- Parent-directory auto-create is no longer silent: if the typed parent
+  doesn't exist, the TUI explicitly confirms "create this directory?"
+  before proceeding.
+
 ## [0.2.0] — 2026-04-19
 
 ### Added
@@ -59,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xPeiPeix/claude-repath/releases/tag/v0.1.0

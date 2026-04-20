@@ -114,33 +114,44 @@ def move_cmd(
         console.print(f"[red]✗ invalid --scope {scope!r}; expected 'narrow' or 'broad'[/red]")
         raise typer.Exit(code=2)
 
+    from_tui = False
     if old_path is None or new_path is None:
+        if dry_run:
+            console.print(
+                "[red]--dry-run requires explicit old/new paths — "
+                "interactive mode already previews before applying.[/red]"
+            )
+            raise typer.Exit(code=2)
         from .tui import run_interactive_move
         default_projects = Path.home() / ".claude" / "projects"
-        chosen = run_interactive_move(default_projects)
+        chosen = run_interactive_move(default_projects, scope=scope)
         if chosen is None:
             console.print("[yellow]cancelled[/yellow]")
             raise typer.Abort()
         old_path, new_path = chosen
+        from_tui = True
 
     ctx = MigrationContext(old_path=old_path, new_path=new_path, scope=scope)
-    plan = plan_migration(ctx)
 
-    console.rule("[bold]Migration Plan[/bold]")
-    _print_plan(plan)
-    if not no_move:
-        console.print(
-            f"[cyan]physical:[/cyan] mv {old_path} -> {new_path}"
-        )
+    if not from_tui:
+        plan = plan_migration(ctx)
+        console.rule("[bold]Migration Plan[/bold]")
+        _print_plan(plan)
+        if not no_move:
+            console.print(
+                f"[cyan]physical:[/cyan] mv {old_path} -> {new_path}"
+            )
 
-    if dry_run:
-        console.print("[dim]dry-run: no changes made[/dim]")
-        raise typer.Exit()
+        if dry_run:
+            console.print("[dim]dry-run: no changes made[/dim]")
+            raise typer.Exit()
 
-    _warn_running_claude()
+        _warn_running_claude()
 
-    if not yes and not typer.confirm("Proceed with migration?"):
-        raise typer.Abort()
+        if not yes and not typer.confirm("Proceed with migration?"):
+            raise typer.Abort()
+    else:
+        _warn_running_claude()
 
     session = start_backup()
     console.print(f"[dim]backup session: {session.timestamp}[/dim]")
@@ -148,13 +159,15 @@ def move_cmd(
     moved = False
     if not no_move:
         try:
-            move_project_folder(old_path, new_path)
+            with console.status("[cyan]Moving project folder...", spinner="dots"):
+                move_project_folder(old_path, new_path)
             moved = True
         except (FileNotFoundError, FileExistsError) as exc:
             console.print(f"[red]✗ physical move failed:[/red] {exc}")
             raise typer.Exit(code=1) from exc
 
-    report = apply_migration(ctx, session)
+    with console.status("[cyan]Rewiring Claude Code state...", spinner="dots"):
+        report = apply_migration(ctx, session)
     report.moved_folder = moved
     _print_apply(report)
 

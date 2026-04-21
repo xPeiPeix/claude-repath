@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-21
+
 ### Added
 
 - **Claude Code plugin distribution.** This repo is now a single-plugin
@@ -19,6 +21,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.claude-plugin/marketplace.json` and `.claude-plugin/plugin.json`
   manifests at the repo root, following the single-plugin marketplace
   pattern (same model as `cndoit18/deepwiki`).
+- **Pre-flight lock check** — `move` / `rewire` now scan running processes
+  for `cwd` or open-file handles inside the target path and **hard-refuse**
+  to start if any are found (unless `--force` / `-f` is passed). Previously,
+  a shell `cd`-ed into the project directory or an IDE holding it open
+  would make `shutil.move` fail mid-migration with `WinError 32`, leaving a
+  half-migrated state. Now the check runs before any mutation and reports
+  PID + process name + specific lock reason. Dry-run mode shows the same
+  report informationally without blocking. Uses `psutil` for cross-platform
+  process inspection.
+- New runtime dependency: `psutil>=5.9` (pre-flight lock check).
+
+### Changed
+
+- **TUI `move` picker: `<unknown>` and 0-session projects sink to the
+  bottom.** Projects whose cwd can't be resolved from their `.jsonl` files
+  (typically empty-shell directories with zero sessions) used to interleave
+  alphabetically with real projects by encoded folder name, making the real
+  projects harder to find. They now sort **after** all resolved entries,
+  and within the resolved group 0-session entries come after non-empty
+  ones. Sort key: `(unknown?, zero_sessions?, cwd_lowercased)`.
 
 ## [0.3.2] — 2026-04-21
 
@@ -143,7 +165,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.2.0...v0.3.0

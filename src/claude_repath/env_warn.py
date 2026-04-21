@@ -72,10 +72,22 @@ def find_env_sensitive_subdirs(path: Path) -> list[EnvSensitiveEntry]:
     return entries
 
 
+def _has_pyvenv_cfg(child: Path) -> bool:
+    """Best-effort check for ``pyvenv.cfg`` inside a candidate venv dir.
+
+    Mirrors the outer scan's tolerance for unreadable filesystem entries —
+    a permission error on a single file must not abort the whole scan.
+    """
+    try:
+        return (child / "pyvenv.cfg").is_file()
+    except OSError:
+        return False
+
+
 def _classify(child: Path) -> EnvSensitiveEntry | None:
     """Return an :class:`EnvSensitiveEntry` if ``child`` matches a known pattern."""
     name = child.name
-    if name in {".venv", "venv"} and (child / "pyvenv.cfg").is_file():
+    if name in {".venv", "venv"} and _has_pyvenv_cfg(child):
         return EnvSensitiveEntry(
             path=child,
             kind="Python venv",

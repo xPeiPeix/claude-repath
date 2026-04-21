@@ -72,7 +72,7 @@ claude-repath move <old> <new> --scope broad
 
 # Override pre-flight lock check (still bounded by OS-level runtime locks
 # — see --force note in Safety section). v0.4.1+ uses atomic os.rename, so
-# a runtime lock now fails loud with the source directory intact; previously
+# a runtime lock now fails loudly with the source directory intact; previously
 # shutil.move could half-succeed on Windows.
 claude-repath move <old> <new> --force
 
@@ -108,7 +108,7 @@ claude-repath rollback 20260419-155331
 ## Safety
 
 - **Pre-flight lock check** (v0.4+): scans every running process via `psutil` for any that have a `cwd` inside the target directory or a file open under it, and **hard-refuses** the migration with exit code 1 if any are found. Reports PID, process name, and specific lock reason (shell `cd`, IDE, editor, etc.). Overridable with `--force` / `-f`.
-- **Atomic physical move** (v0.4.1+): even when the pre-flight check misses a lock (elevated processes invisible to `psutil`, TOCTOU races, transient AV-scanner or Windows-Search-indexer locks), the physical folder move uses a bare `os.rename` instead of `shutil.move` — no silent `copytree + rmtree` downgrade. Result: on `WinError 32` / `5` the move fails loud with exit code 1 and the source directory is **guaranteed intact** for retry; the previous half-migration failure mode (target complete, source half-deleted) is now impossible. Cross-volume moves fall back to `robocopy /MOVE` (Windows) or `shutil.move` (Unix).
+- **Atomic physical move** (v0.4.1+): even when the pre-flight check misses a lock (elevated processes invisible to `psutil`, TOCTOU races, transient AV-scanner or Windows-Search-indexer locks), the physical folder move uses a bare `os.rename` instead of `shutil.move` — no silent `copytree + rmtree` downgrade. Result: on `WinError 32` / `5` the move fails loudly with exit code 1 and the source directory is **guaranteed intact** for retry; the previous half-migration failure mode (target complete, source half-deleted) is now impossible. Cross-volume moves fall back to `robocopy /MOVE` (Windows) or `shutil.move` (Unix).
 - **Dry-run by default logic**: destructive commands require either `--dry-run` preview first or explicit confirmation. Dry-run also previews the pre-flight lock report without blocking.
 - **Auto-backup**: every mutation is snapshotted to `~/.claude/.repath-backups/<timestamp>/`.
 - **Running-Claude warning**: soft heads-up if any `claude` CLI process is detected holding state files (complements the hard pre-flight check above).

@@ -15,6 +15,7 @@ from .encoder import encode_path, find_worktree_folders
 from .layers.base import MigrationContext
 from .migrate import (
     ApplyReport,
+    PhysicalMoveError,
     PlanReport,
     apply_migration,
     detect_claude_processes,
@@ -118,6 +119,35 @@ def _check_preflight_locks(path: str, *, force: bool, dry_run: bool) -> None:
     console.print("[yellow]--force given; proceeding despite locks.[/yellow]")
 
 
+def _check_env_sensitive_subdirs(path: str) -> None:
+    """Warn (non-blocking) if the source contains venv / node_modules / etc.
+
+    These directories embed absolute paths in binaries / scripts at creation
+    time and will not function at the new location until rebuilt. claude-repath
+    moves the bytes correctly but cannot rebuild them — every package manager
+    has its own command and auto-running any is risky. The warning lists the
+    affected subdirs and the rebuild command hint per kind; the migration
+    itself proceeds regardless.
+    """
+    from .env_warn import find_env_sensitive_subdirs, format_env_warn_report
+
+    entries = find_env_sensitive_subdirs(Path(path))
+    if not entries:
+        return
+    console.print(
+        Panel(
+            f"The following subdirectories under:\n"
+            f"  [cyan]{path}[/cyan]\n"
+            f"embed absolute paths and will need to be rebuilt after the move:\n\n"
+            + format_env_warn_report(entries)
+            + "\n\n[dim]The move itself proceeds as normal — this is a heads-up "
+            "only.[/dim]",
+            title="[yellow]⚠ Path-sensitive subdirectories[/yellow]",
+            border_style="yellow",
+        )
+    )
+
+
 @app.command("move")
 def move_cmd(
     old_path: str = typer.Argument(None, help="Current absolute project path"),
@@ -141,7 +171,11 @@ def move_cmd(
         False,
         "--force",
         "-f",
-        help="Proceed even if another process holds resources under the path",
+        help="Proceed even if pre-flight lock check finds processes holding "
+        "resources under the path. Note: cannot bypass OS-level runtime "
+        "locks (elevated processes, AV scans, etc.) — if one fires during "
+        "the move itself, the physical move will still fail, but v0.4.1+ "
+        "uses atomic rename so the source directory stays intact for retry.",
     ),
 ) -> None:
     """Move a project folder and rewire Claude Code state in one shot.
@@ -183,6 +217,8 @@ def move_cmd(
             )
 
         _check_preflight_locks(scan_path, force=force, dry_run=dry_run)
+        if not no_move:
+            _check_env_sensitive_subdirs(scan_path)
 
         if dry_run:
             console.print("[dim]dry-run: no changes made[/dim]")
@@ -195,6 +231,8 @@ def move_cmd(
     else:
         _warn_running_claude()
         _check_preflight_locks(scan_path, force=force, dry_run=False)
+        if not no_move:
+            _check_env_sensitive_subdirs(scan_path)
 
     session = start_backup()
     console.print(f"[dim]backup session: {session.timestamp}[/dim]")
@@ -207,6 +245,15 @@ def move_cmd(
             moved = True
         except (FileNotFoundError, FileExistsError) as exc:
             console.print(f"[red]✗ physical move failed:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        except PhysicalMoveError as exc:
+            console.print(
+                Panel(
+                    str(exc),
+                    title="[red]✗ physical move failed (source intact)[/red]",
+                    border_style="red",
+                )
+            )
             raise typer.Exit(code=1) from exc
 
     with console.status("[cyan]Rewiring Claude Code state...", spinner="dots"):
@@ -226,7 +273,10 @@ def rewire_cmd(
         False,
         "--force",
         "-f",
-        help="Proceed even if another process holds resources under the new path",
+        help="Proceed even if pre-flight lock check finds processes holding "
+        "resources under the new path. Rewire only touches ~/.claude state, "
+        "so runtime OS locks there are rare — but `--force` is still bounded "
+        "by real filesystem permissions.",
     ),
 ) -> None:
     """Rewire state only — assume the project folder was already moved."""

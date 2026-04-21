@@ -70,8 +70,10 @@ claude-repath move D:\dev_code\time-blocks D:\dev_code\Life\time-blocks
 # Broader scan — also rewrite cross-project references (use with care)
 claude-repath move <old> <new> --scope broad
 
-# Override pre-flight lock check (when a shell or IDE holds the old path
-# and you're confident it won't cause a half-migration)
+# Override pre-flight lock check (still bounded by OS-level runtime locks
+# — see --force note in Safety section). v0.4.1+ uses atomic os.rename, so
+# a runtime lock now fails loud with the source directory intact; previously
+# shutil.move could half-succeed on Windows.
 claude-repath move <old> <new> --force
 
 # If you already moved the folder manually, just rewire state
@@ -105,11 +107,36 @@ claude-repath rollback 20260419-155331
 
 ## Safety
 
-- **Pre-flight lock check** (v0.4+): scans every running process via `psutil` for any that have a `cwd` inside the target directory or a file open under it, and **hard-refuses** the migration with exit code 1 if any are found. Reports PID, process name, and specific lock reason (shell `cd`, IDE, editor, etc.). Overridable with `--force` / `-f`. Prevents the nastiest failure mode on Windows — `shutil.move` raising `WinError 32` **mid-migration** and leaving a half-migrated state.
+- **Pre-flight lock check** (v0.4+): scans every running process via `psutil` for any that have a `cwd` inside the target directory or a file open under it, and **hard-refuses** the migration with exit code 1 if any are found. Reports PID, process name, and specific lock reason (shell `cd`, IDE, editor, etc.). Overridable with `--force` / `-f`.
+- **Atomic physical move** (v0.4.1+): even when the pre-flight check misses a lock (elevated processes invisible to `psutil`, TOCTOU races, transient AV-scanner or Windows-Search-indexer locks), the physical folder move uses a bare `os.rename` instead of `shutil.move` — no silent `copytree + rmtree` downgrade. Result: on `WinError 32` / `5` the move fails loud with exit code 1 and the source directory is **guaranteed intact** for retry; the previous half-migration failure mode (target complete, source half-deleted) is now impossible. Cross-volume moves fall back to `robocopy /MOVE` (Windows) or `shutil.move` (Unix).
 - **Dry-run by default logic**: destructive commands require either `--dry-run` preview first or explicit confirmation. Dry-run also previews the pre-flight lock report without blocking.
 - **Auto-backup**: every mutation is snapshotted to `~/.claude/.repath-backups/<timestamp>/`.
 - **Running-Claude warning**: soft heads-up if any `claude` CLI process is detected holding state files (complements the hard pre-flight check above).
 - **Rollback**: `claude-repath rollback <timestamp>` restores a previous snapshot.
+
+---
+
+## Known limitations
+
+Some directories inside a project embed **absolute paths** at creation time,
+and no amount of careful copying fixes that — they must be rebuilt after the
+move. `claude-repath move` detects the most common offenders and prints a
+warning (non-blocking) so you know what to rebuild:
+
+| Directory | Why it breaks | How to rebuild |
+|---|---|---|
+| Python `.venv/` / `venv/` | Windows `Scripts/*.exe` trampolines hard-code the path to `python.exe`; Unix scripts use `#!/abs/path` shebangs | `uv sync` / `pip install -e .` / `poetry install` — whichever your project uses |
+| `node_modules/` | `.bin/*.cmd` shims (Windows) and pnpm symlinks may contain absolute paths | `npm ci` / `pnpm install` / `yarn install` |
+
+`claude-repath` **does not** run the rebuild for you — every package manager
+has its own command and auto-running any of them without your consent can
+clobber lockfiles, pull unexpected versions, or take a long time with no
+progress feedback. The warning tells you what needs attention; you run the
+right command.
+
+Other directories with similar issues (`target/` for Rust debug builds,
+`vendor/bundle/` for Ruby Bundler, etc.) are currently **not** detected —
+flag them via a GitHub issue if you hit problems.
 
 ---
 
@@ -193,7 +220,9 @@ src/claude_repath/
 
 ## Roadmap
 
-- **v0.4 (current)** — Pre-flight lock check (psutil-based scan of running processes for `cwd`/`open_files` under the target path, hard-refusing unless `--force` is passed); Claude Code plugin distribution (installable as a single-plugin marketplace, ships a skill that lets Claude recognize rename symptoms and recommend the tool automatically); TUI picker sorts `<unknown>` and zero-session projects to the bottom.
+- **v0.4.2 (current)** — Pre-flight warning for path-sensitive subdirectories (`.venv` / `venv` with `pyvenv.cfg`, `node_modules`). Non-blocking heads-up before `move`: lists what will need rebuilding at the new location and the per-ecosystem rebuild command, but does not auto-rebuild (auto-running random package managers is risky). New `env_warn.py` module, new Known limitations section in the README, SKILL.md Edge cases entry so the Claude Code agent can warn users before they run `move`.
+- **v0.4.1** — Atomic `os.rename` replaces `shutil.move` for the physical folder move; `EXDEV` cross-volume fallback uses `robocopy /MOVE` on Windows. Eliminates the Windows half-migration failure mode (source half-deleted + target complete) that the v0.4 pre-flight check could only prevent, not recover from. New `PhysicalMoveError` with actionable recovery message. `--force` help text clarifies it cannot bypass OS-level runtime locks.
+- **v0.4** — Pre-flight lock check (psutil-based scan of running processes for `cwd`/`open_files` under the target path, hard-refusing unless `--force` is passed); Claude Code plugin distribution (installable as a single-plugin marketplace, ships a skill that lets Claude recognize rename symptoms and recommend the tool automatically); TUI picker sorts `<unknown>` and zero-session projects to the bottom.
 - **v0.3** — Wizard-style TUI with three-step flow (pick / locate / preview), two-stage path input (parent directory + project name) with Tab-completion, per-layer change counts in a Rich preview panel, and a live spinner during apply.
 - **v0.2** — Interactive TUI picker, `--scope narrow|broad` flag, Desktop Local Storage diagnostic, cross-platform path handling (Win/macOS/Linux).
 - **v0.5+ (backlog)** — Chromium `Local Storage/leveldb` auto-migration for Claude Code Desktop users (requires closing Desktop first + `plyvel-ci` bindings + META-protobuf maintenance); interactive TUI variants for `rollback` / `doctor`; shell-completion auto-install (typer's built-in); Windows `handle.exe` fallback for locked-for-write detection that psutil can't see.

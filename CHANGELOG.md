@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-04-21
+
+### Added
+
+- **Pre-flight warning for path-sensitive subdirectories.** `move` now
+  scans the first level of the source path for directories that embed
+  absolute paths at creation time and will not function at the new
+  location until rebuilt. Currently detects:
+  - Python virtual environments (`.venv/` or `venv/` containing
+    `pyvenv.cfg`) — Windows `Scripts/*.exe` are trampoline binaries whose
+    resource section hard-codes the absolute path to `python.exe`; Unix
+    scripts use `#!/abs/path` shebangs. After a move, `pytest` / `ruff` /
+    any console script silently invokes the *old* path's `python.exe` (if
+    still on disk) and imports from the old venv's `site-packages`.
+  - `node_modules/` — `.bin/*.cmd` shims and pnpm symlinks may contain
+    absolute paths.
+  Unlike the pre-flight lock check, this is a **non-blocking warning**:
+  the move proceeds normally, but the user is told what they need to
+  rebuild and which command to use (`uv sync` / `pip install -e .` /
+  `npm ci` / etc.). claude-repath does not auto-rebuild — every package
+  manager has its own command and auto-running any of them without user
+  consent can clobber lockfiles, pull unexpected versions, or take a long
+  time with no progress feedback.
+- New module `env_warn.py` (`find_env_sensitive_subdirs`,
+  `format_env_warn_report`) paralleling the `locks.py` layout.
+- 12 new pytest cases in `test_env_warn.py` (160 total): venv detection
+  with `pyvenv.cfg` sentinel, `node_modules` detection, false-positive
+  rejection (venv-named folder without `pyvenv.cfg`), non-recursive
+  behavior (nested venvs under `src/` not flagged), multi-entry
+  aggregation.
+
+### Changed
+
+- README gains a new **"Known limitations"** section above Platform
+  support, documenting the venv / `node_modules` rebuild requirement with
+  a per-ecosystem command reference table.
+- `skills/claude-repath/SKILL.md` Edge cases section updated so the
+  Claude Code agent warns users about the rebuild step **before** they
+  run `move`.
+
+## [0.4.1] — 2026-04-21
+
+### Fixed
+
+- **Atomic physical move — no more half-migrated source directories.**
+  `move_project_folder` used to call `shutil.move`, which on Windows
+  silently downgrades to a non-atomic `copytree + rmtree` when `os.rename`
+  fails (cross-device **or** `WinError 32` / `WinError 5` from a file
+  lock). If the lock only fired mid-rmtree (e.g. Docker Desktop's daemon
+  holding `.git/objects/<hash>`, AV scanners, Windows Search indexer), the
+  copy had already completed — leaving the user with **both** a complete
+  target and a half-deleted source. The v0.4 pre-flight lock check
+  (`locks.py`) caught many cases pre-emptively but could never cover
+  elevated processes, TOCTOU races, or transient AV locks. The rewrite:
+  - Primary path is now a bare `os.rename` — atomic, same-volume only.
+  - `EXDEV` (cross-volume) falls back to `robocopy /MOVE` on Windows
+    (built-in retry on locks, ships with the OS) or `shutil.move` on Unix
+    (cross-volume is safe there — no in-use semantics).
+  - **Any other** `OSError` raises a new `PhysicalMoveError` with a
+    clear recovery message pointing to `claude-repath rewire`, and the
+    source directory is guaranteed 100% intact for retry.
+- **`.claude-plugin/plugin.json` + `marketplace.json` bumped from 0.3.2
+  to 0.4.1.** They had been stuck at 0.3.2 across the 0.3.2→0.4.0 jump.
+
+### Changed
+
+- **`--force` help text clarified.** The flag still bypasses pre-flight
+  lock detection but **cannot** bypass OS-level runtime locks (elevated
+  processes, AV scans, Windows Search indexer). The new atomic-rename
+  behavior makes this limitation survivable — you retry rather than
+  recover from a half-migration.
+
+### Added
+
+- 9 new pytest cases in `test_migrate.py` pinning the atomic-rename
+  invariants (148 total): same-volume `os.rename` primary path,
+  source-preserved-on-lock (the load-bearing safety invariant),
+  `EXDEV`-triggers-fallback, robocopy argument shape / failure handling,
+  Unix `shutil.move` fallback. These regression tests lock the
+  non-atomic `copytree + rmtree` downgrade out permanently.
+
 ## [0.4.0] — 2026-04-21
 
 ### Added
@@ -165,7 +246,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.0...v0.3.1

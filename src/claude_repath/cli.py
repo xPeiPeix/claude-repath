@@ -86,6 +86,38 @@ def _warn_running_claude() -> None:
         )
 
 
+def _check_preflight_locks(path: str, *, force: bool, dry_run: bool) -> None:
+    """Hard-refuse migration if another process holds resources under ``path``.
+
+    Unlike the soft ``_warn_running_claude`` check, locks from shells,
+    editors, or IDEs cause mid-migration ``shutil.move`` failures on Windows.
+    This check exits with code 1 unless ``--force`` is passed or the user is
+    in dry-run mode (in which case the report is informational only).
+    """
+    from .locks import find_locks_on_path, format_lock_report
+
+    locks = find_locks_on_path(Path(path))
+    if not locks:
+        return
+    prefix = "[yellow]dry-run preview: [/yellow]" if dry_run else ""
+    console.print(
+        Panel(
+            f"{prefix}The following processes hold resources under:\n"
+            f"  [cyan]{path}[/cyan]\n\n"
+            + format_lock_report(locks)
+            + "\n\n[yellow]Close these processes, or pass "
+            "[cyan]--force[/cyan] to proceed anyway.[/yellow]",
+            title="[red]✗ Pre-flight lock check[/red]",
+            border_style="red",
+        )
+    )
+    if dry_run:
+        return
+    if not force:
+        raise typer.Exit(code=1)
+    console.print("[yellow]--force given; proceeding despite locks.[/yellow]")
+
+
 @app.command("move")
 def move_cmd(
     old_path: str = typer.Argument(None, help="Current absolute project path"),
@@ -104,6 +136,12 @@ def move_cmd(
         "--scope",
         help="jsonl scan scope: 'narrow' (main + worktrees, safer default) "
         "or 'broad' (every project dir; rewrites cross-project references)",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Proceed even if another process holds resources under the path",
     ),
 ) -> None:
     """Move a project folder and rewire Claude Code state in one shot.
@@ -133,6 +171,8 @@ def move_cmd(
 
     ctx = MigrationContext(old_path=old_path, new_path=new_path, scope=scope)
 
+    scan_path = new_path if no_move else old_path
+
     if not from_tui:
         plan = plan_migration(ctx)
         console.rule("[bold]Migration Plan[/bold]")
@@ -141,6 +181,8 @@ def move_cmd(
             console.print(
                 f"[cyan]physical:[/cyan] mv {old_path} -> {new_path}"
             )
+
+        _check_preflight_locks(scan_path, force=force, dry_run=dry_run)
 
         if dry_run:
             console.print("[dim]dry-run: no changes made[/dim]")
@@ -152,6 +194,7 @@ def move_cmd(
             raise typer.Abort()
     else:
         _warn_running_claude()
+        _check_preflight_locks(scan_path, force=force, dry_run=False)
 
     session = start_backup()
     console.print(f"[dim]backup session: {session.timestamp}[/dim]")
@@ -179,6 +222,12 @@ def rewire_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", "-n"),
     yes: bool = typer.Option(False, "--yes", "-y"),
     scope: str = typer.Option("narrow", "--scope"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Proceed even if another process holds resources under the new path",
+    ),
 ) -> None:
     """Rewire state only — assume the project folder was already moved."""
     move_cmd(
@@ -188,6 +237,7 @@ def rewire_cmd(
         no_move=True,
         yes=yes,
         scope=scope,
+        force=force,
     )
 
 

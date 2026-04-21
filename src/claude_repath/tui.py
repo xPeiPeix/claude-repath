@@ -41,6 +41,15 @@ def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
 
     Worktree-derived folders (``...--claude-worktrees-...``) are excluded
     because they're migrated automatically with their parent project.
+
+    Results are ordered so the most useful entries float to the top:
+
+    1. Projects with a resolved cwd and at least one session (real work)
+    2. Projects with a resolved cwd but zero sessions (rare edge case)
+    3. Projects with ``<unknown: ...>`` placeholder cwd (empty shells)
+
+    Within each group entries are sorted alphabetically by cwd for
+    deterministic output.
     """
     if not projects_dir.is_dir():
         return []
@@ -55,6 +64,7 @@ def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
             cwd = f"<unknown: {sub.name}>"
         sessions = sum(1 for _ in sub.glob("*.jsonl"))
         out.append((sub, cwd, sessions))
+    out.sort(key=lambda t: (t[1].startswith("<unknown"), t[2] == 0, t[1].lower()))
     return out
 
 

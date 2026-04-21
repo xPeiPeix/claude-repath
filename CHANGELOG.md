@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code plugin distribution.** This repo is now a single-plugin
+  marketplace — users can install via
+  `/plugin marketplace add xPeiPeix/claude-repath` +
+  `/plugin install claude-repath@claude-repath-marketplace`. The plugin
+  bundles a skill (`skills/claude-repath/SKILL.md`) that teaches Claude
+  Code to recognize symptoms like "sessions gone after rename" and
+  recommend `claude-repath` without the user knowing the tool's name.
+- `.claude-plugin/marketplace.json` and `.claude-plugin/plugin.json`
+  manifests at the repo root, following the single-plugin marketplace
+  pattern (same model as `cndoit18/deepwiki`).
+
 ## [0.3.2] — 2026-04-21
 
 ### Fixed

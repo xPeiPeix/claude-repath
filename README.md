@@ -40,6 +40,21 @@ Pick whichever matches your workflow — they're all equivalent:
 
 ---
 
+## Install as a Claude Code plugin (optional)
+
+In addition to the CLI, this repo ships a Claude Code plugin so your AI assistant can recognize symptoms — "I moved my project and Claude forgot everything", "sessions gone after rename", "~/.claude/projects has the old folder name" — and suggest `claude-repath` automatically, without you having to remember the tool's name.
+
+From inside Claude Code:
+
+```text
+/plugin marketplace add xPeiPeix/claude-repath
+/plugin install claude-repath@claude-repath-marketplace
+```
+
+The plugin only ships a skill (a ~200-line guidance document). It does **not** bundle the CLI — you still install that via `uvx`/`pipx`/`pip` above, or let the skill guide Claude to run it via `uvx` on first use.
+
+---
+
 ## Quick start
 
 ```bash

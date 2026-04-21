@@ -7,7 +7,7 @@
 
 > Rewire Claude Code's local state when your project folder moves.
 
-![claude-repath v0.3 wizard demo](./demo.gif)
+![claude-repath wizard demo](./demo.gif)
 
 When you move or rename a project directory, Claude Code loses track of its sessions, memory, todos, and worktrees — because the absolute path is hardcoded in **four** different places. `claude-repath` patches all of them in one shot.
 
@@ -70,6 +70,10 @@ claude-repath move D:\dev_code\time-blocks D:\dev_code\Life\time-blocks
 # Broader scan — also rewrite cross-project references (use with care)
 claude-repath move <old> <new> --scope broad
 
+# Override pre-flight lock check (when a shell or IDE holds the old path
+# and you're confident it won't cause a half-migration)
+claude-repath move <old> <new> --force
+
 # If you already moved the folder manually, just rewire state
 claude-repath rewire D:\dev_code\time-blocks D:\dev_code\Life\time-blocks
 
@@ -95,16 +99,17 @@ claude-repath rollback 20260419-155331
 | 4 | `~/.claude.json` — `projects` key | ✅ |
 | 5 | Worktree-derived project folders (auto-discovered) | ✅ |
 | 6 | `~/.claude/git-worktrees.json` (if present) | ✅ |
-| 7 | Chromium `Local Storage/leveldb` entries (Desktop app) | ⏳ v0.4+ backlog |
+| 7 | Chromium `Local Storage/leveldb` entries (Desktop app) | ⏳ backlog |
 
 ---
 
 ## Safety
 
-- **Dry-run by default logic**: destructive commands require either `--dry-run` preview first or explicit confirmation
-- **Auto-backup**: every mutation is snapshotted to `~/.claude/.repath-backups/<timestamp>/`
-- **Process guard**: refuses to run if any `claude` process is holding the state files
-- **Rollback**: `claude-repath rollback <timestamp>` restores a previous snapshot
+- **Pre-flight lock check** (v0.4+): scans every running process via `psutil` for any that have a `cwd` inside the target directory or a file open under it, and **hard-refuses** the migration with exit code 1 if any are found. Reports PID, process name, and specific lock reason (shell `cd`, IDE, editor, etc.). Overridable with `--force` / `-f`. Prevents the nastiest failure mode on Windows — `shutil.move` raising `WinError 32` **mid-migration** and leaving a half-migrated state.
+- **Dry-run by default logic**: destructive commands require either `--dry-run` preview first or explicit confirmation. Dry-run also previews the pre-flight lock report without blocking.
+- **Auto-backup**: every mutation is snapshotted to `~/.claude/.repath-backups/<timestamp>/`.
+- **Running-Claude warning**: soft heads-up if any `claude` CLI process is detected holding state files (complements the hard pre-flight check above).
+- **Rollback**: `claude-repath rollback <timestamp>` restores a previous snapshot.
 
 ---
 
@@ -125,7 +130,7 @@ Claude Code Desktop stores additional session state in Chromium's Local Storage 
 - macOS: `~/Library/Application Support/claude/Local Storage/leveldb/`
 - Linux: `~/.config/claude/Local Storage/leveldb/`
 
-`claude-repath doctor` reports whether this directory exists on your machine but does **not** migrate it automatically — see [Roadmap](#roadmap) for planned v0.3+ support. If you use Desktop exclusively and move a project, the Desktop UI's "recent projects" list may show a stale path. Remedy: open the new folder via Desktop's File menu to re-register it.
+`claude-repath doctor` reports whether this directory exists on your machine but does **not** migrate it automatically — tracked in the [Roadmap](#roadmap) as future work (needs `plyvel-ci` + META-protobuf handling). If you use Desktop exclusively and move a project, the Desktop UI's "recent projects" list may show a stale path. Remedy: open the new folder via Desktop's File menu to re-register it.
 
 ---
 
@@ -171,8 +176,11 @@ Layout:
 src/claude_repath/
 ├── cli.py              # typer app (move/rewire/doctor/list/rollback)
 ├── migrate.py          # orchestrator
+├── tui.py              # wizard picker + project discovery
+├── locks.py            # pre-flight psutil lock detection (v0.4+)
 ├── encoder.py          # path → folder-name encoding
 ├── backup.py           # manifest-based backup & LIFO rollback
+├── platform_paths.py   # per-OS Desktop state paths (Win/macOS/Linux)
 ├── utils.py            # shared path rewrite helpers
 └── layers/
     ├── projects_dir.py    # ~/.claude/projects/<encoded>/ renaming
@@ -185,9 +193,10 @@ src/claude_repath/
 
 ## Roadmap
 
-- **v0.3 (current)** — Wizard-style TUI with three-step flow (pick / locate / preview), two-stage path input (parent directory + project name) with Tab-completion, per-layer change counts in a Rich preview panel, and a live spinner during apply.
+- **v0.4 (current)** — Pre-flight lock check (psutil-based scan of running processes for `cwd`/`open_files` under the target path, hard-refusing unless `--force` is passed); Claude Code plugin distribution (installable as a single-plugin marketplace, ships a skill that lets Claude recognize rename symptoms and recommend the tool automatically); TUI picker sorts `<unknown>` and zero-session projects to the bottom.
+- **v0.3** — Wizard-style TUI with three-step flow (pick / locate / preview), two-stage path input (parent directory + project name) with Tab-completion, per-layer change counts in a Rich preview panel, and a live spinner during apply.
 - **v0.2** — Interactive TUI picker, `--scope narrow|broad` flag, Desktop Local Storage diagnostic, cross-platform path handling (Win/macOS/Linux).
-- **v0.4+ (backlog)** — Chromium `Local Storage/leveldb` auto-migration for Claude Code Desktop users (requires closing Desktop first + `plyvel-ci` bindings + META-protobuf maintenance); interactive TUI variants for `rollback` / `doctor`; shell-completion auto-install (typer's built-in).
+- **v0.5+ (backlog)** — Chromium `Local Storage/leveldb` auto-migration for Claude Code Desktop users (requires closing Desktop first + `plyvel-ci` bindings + META-protobuf maintenance); interactive TUI variants for `rollback` / `doctor`; shell-completion auto-install (typer's built-in); Windows `handle.exe` fallback for locked-for-write detection that psutil can't see.
 
 ---
 

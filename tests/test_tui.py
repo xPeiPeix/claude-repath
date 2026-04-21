@@ -89,6 +89,39 @@ class TestExtractCwdFromSessions:
         result = _extract_cwd_from_sessions(proj)
         assert result == "G"
 
+    def test_reads_cwd_from_later_line_when_first_is_metadata(self, tmp_path: Path):
+        """Real Claude sessions: line 0 is session metadata (no cwd), cwd on line 1+."""
+        proj = tmp_path / "p"
+        proj.mkdir()
+        content = (
+            json.dumps({"type": "session", "permissionMode": "ask", "sessionId": "abc"})
+            + "\n"
+            + json.dumps({"type": "user", "cwd": r"D:\real\path"})
+            + "\n"
+        )
+        (proj / "s.jsonl").write_text(content, encoding="utf-8")
+        assert _extract_cwd_from_sessions(proj) == r"D:\real\path"
+
+    def test_gives_up_after_max_lines(self, tmp_path: Path):
+        """Bounded scan — don't read unbounded lines from a huge session."""
+        proj = tmp_path / "p"
+        proj.mkdir()
+        noise = [json.dumps({"type": "noise", "i": i}) for i in range(100)]
+        (proj / "s.jsonl").write_text("\n".join(noise) + "\n", encoding="utf-8")
+        assert _extract_cwd_from_sessions(proj) is None
+
+    def test_continues_past_cwd_less_lines_in_same_file(self, tmp_path: Path):
+        """Multiple metadata lines before cwd — keep scanning within one file."""
+        proj = tmp_path / "p"
+        proj.mkdir()
+        lines = [
+            json.dumps({"type": "session", "sessionId": "s"}),
+            json.dumps({"type": "snapshot", "snapshot": {}}),
+            json.dumps({"type": "user", "cwd": r"D:\found\on\line\3"}),
+        ]
+        (proj / "s.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        assert _extract_cwd_from_sessions(proj) == r"D:\found\on\line\3"
+
 
 class TestDiscoverProjects:
     def test_lists_top_level_projects_skipping_worktrees(self, tmp_path: Path):

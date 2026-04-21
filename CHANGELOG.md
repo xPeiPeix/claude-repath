@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-04-21
+
+### Fixed
+
+- **Interactive `move` picker now resolves real paths for all projects**,
+  not just the lucky few. `_extract_cwd_from_sessions` previously read
+  only the **first** JSON line of each `.jsonl` and then `break`-ed;
+  real Claude Code sessions put `cwd` on the first user/assistant
+  message (line 1+), while line 0 is session metadata
+  (`type` / `permissionMode` / `sessionId`) with no `cwd` field. Result:
+  the vast majority of projects showed up as `<unknown: D--dev-code-...>`
+  and couldn't be selected without typing the full path. Fix: scan up
+  to `_MAX_LINES_PER_JSONL` (50) lines per file before moving on.
+
+### Added
+
+- 3 new pytest cases in `test_tui.py` covering the real-world jsonl
+  layout (metadata line first, cwd on line 2+), the bounded-scan
+  fallback, and multiple metadata lines preceding cwd — plugging the
+  testing blind spot that let the original bug ship (122 total).
+
 ## [0.3.1] — 2026-04-21
 
 ### Fixed
@@ -109,7 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.1.0...v0.2.0

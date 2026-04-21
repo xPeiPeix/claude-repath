@@ -29,6 +29,12 @@ from .migrate import PlanReport, plan_migration
 _console = Console(stderr=True)
 STEPS_TOTAL = 3
 
+# Claude Code jsonl files start with a session-metadata line
+# (type/permissionMode/sessionId) with no cwd; cwd appears on the first
+# user/assistant message line. 50 is a defensive upper bound — in practice
+# cwd is on line 2-3.
+_MAX_LINES_PER_JSONL = 50
+
 
 def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
     """Return ``[(folder, resolved_cwd, session_count), ...]`` for top-level projects.
@@ -53,12 +59,19 @@ def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
 
 
 def _extract_cwd_from_sessions(project_dir: Path) -> str | None:
-    """Read a representative cwd value from one of the project's jsonl files."""
+    """Read a representative cwd value from one of the project's jsonl files.
+
+    Real Claude Code sessions put cwd on the first user/assistant message,
+    not the opening session-metadata line — so we scan up to
+    ``_MAX_LINES_PER_JSONL`` lines per file before moving on.
+    """
     jsonls = sorted(project_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
     for jsonl in jsonls:
         try:
             with jsonl.open("r", encoding="utf-8") as fh:
-                for line in fh:
+                for i, line in enumerate(fh):
+                    if i >= _MAX_LINES_PER_JSONL:
+                        break
                     if not line.strip():
                         continue
                     try:
@@ -68,7 +81,6 @@ def _extract_cwd_from_sessions(project_dir: Path) -> str | None:
                     cwd = _find_cwd(obj)
                     if cwd:
                         return cwd
-                    break
         except OSError:
             continue
     return None

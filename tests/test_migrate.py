@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from claude_repath.backup import rollback, start_backup
 from claude_repath.layers.base import MigrationContext
-from claude_repath.migrate import apply_migration, plan_migration
+from claude_repath.migrate import (
+    PhysicalMoveError,
+    apply_migration,
+    move_project_folder,
+    plan_migration,
+)
 
 
 @pytest.fixture
@@ -179,6 +187,210 @@ class TestDetectClaudeProcesses:
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setattr(migrate.subprocess, "run", fake_run)
         assert migrate.detect_claude_processes() == []
+
+
+class TestMoveProjectFolder:
+    """Regression tests for the ``os.rename``-first physical move.
+
+    The v0.4.1 rewrite replaced ``shutil.move`` (which silently downgrades to
+    ``copytree + rmtree`` on Windows cross-device or lock failures, leaving a
+    half-migrated state) with an atomic ``os.rename`` + explicit ``EXDEV``
+    fallback. These tests pin the new guarantees:
+
+    * Same-volume happy path uses ``os.rename`` directly.
+    * Non-``EXDEV`` ``OSError`` (simulated lock) raises ``PhysicalMoveError``
+      with the source directory 100% intact — **no** copy-delete downgrade.
+    * ``EXDEV`` triggers the cross-volume fallback (``robocopy`` on Windows,
+      ``shutil.move`` on Unix).
+    * Pre-existing refusal semantics (``FileNotFoundError`` /
+      ``FileExistsError``) are preserved.
+    """
+
+    def test_same_volume_uses_os_rename(self, tmp_path: Path, monkeypatch):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "file.txt").write_text("hi", encoding="utf-8")
+        dst = tmp_path / "dst"
+
+        calls: list[tuple[str, str]] = []
+        original_rename = os.rename
+
+        def spy_rename(a, b):
+            calls.append((str(a), str(b)))
+            return original_rename(a, b)
+
+        monkeypatch.setattr(os, "rename", spy_rename)
+
+        move_project_folder(str(src), str(dst))
+
+        assert calls == [(str(src), str(dst))]
+        assert dst.is_dir()
+        assert (dst / "file.txt").read_text(encoding="utf-8") == "hi"
+        assert not src.exists()
+
+    def test_non_exdev_oserror_preserves_source_and_raises(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """The load-bearing invariant: on a simulated Windows lock failure
+        (``errno != EXDEV``), the source directory must be left intact and
+        the target must NOT exist. No ``copytree + rmtree`` downgrade — that
+        is exactly the non-atomic path we rewrote to eliminate.
+        """
+        src = tmp_path / "src"
+        src.mkdir()
+        critical = src / "critical.txt"
+        critical.write_text("must-survive", encoding="utf-8")
+        dst = tmp_path / "dst"
+
+        def fake_rename(a, b):
+            raise PermissionError(
+                errno.EACCES, "The process cannot access the file", str(critical)
+            )
+
+        monkeypatch.setattr(os, "rename", fake_rename)
+
+        with pytest.raises(PhysicalMoveError) as excinfo:
+            move_project_folder(str(src), str(dst))
+
+        msg = str(excinfo.value)
+        assert "Source directory left intact" in msg
+        assert "claude-repath rewire" in msg
+        # Critical safety: source must be 100% intact, target must not exist.
+        assert src.is_dir()
+        assert critical.read_text(encoding="utf-8") == "must-survive"
+        assert not dst.exists()
+
+    def test_exdev_triggers_cross_volume_fallback(
+        self, tmp_path: Path, monkeypatch
+    ):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "f.txt").write_text("x", encoding="utf-8")
+        dst = tmp_path / "dst"
+
+        def fake_rename(a, b):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+        monkeypatch.setattr(os, "rename", fake_rename)
+
+        fallback_calls: list[tuple[Path, Path]] = []
+
+        def spy_fallback(old: Path, new: Path):
+            fallback_calls.append((old, new))
+            # Perform a minimal same-directory "move" so dst exists at the end.
+            import shutil
+
+            shutil.copytree(str(old), str(new))
+            shutil.rmtree(str(old))
+
+        monkeypatch.setattr(
+            "claude_repath.migrate._cross_volume_move", spy_fallback
+        )
+
+        move_project_folder(str(src), str(dst))
+
+        assert len(fallback_calls) == 1
+        assert fallback_calls[0] == (Path(str(src)), Path(str(dst)))
+        assert dst.is_dir()
+        assert not src.exists()
+
+    def test_raises_filenotfound_when_source_missing(self, tmp_path: Path):
+        with pytest.raises(FileNotFoundError):
+            move_project_folder(
+                str(tmp_path / "nope"), str(tmp_path / "dst")
+            )
+
+    def test_raises_fileexists_when_target_exists(self, tmp_path: Path):
+        src = tmp_path / "src"
+        src.mkdir()
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        with pytest.raises(FileExistsError):
+            move_project_folder(str(src), str(dst))
+
+    def test_creates_missing_parent_dir_of_target(
+        self, tmp_path: Path, monkeypatch
+    ):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "f.txt").write_text("y", encoding="utf-8")
+        # Deep path whose parent does not yet exist.
+        dst = tmp_path / "a" / "b" / "c" / "dst"
+
+        move_project_folder(str(src), str(dst))
+
+        assert dst.is_dir()
+        assert (dst / "f.txt").read_text(encoding="utf-8") == "y"
+
+
+class TestCrossVolumeFallback:
+    """Directly exercise ``_cross_volume_move``'s platform branches.
+
+    These tests mock the underlying move primitive (``subprocess.run`` for
+    Windows / ``shutil.move`` for Unix) so they run cross-platform.
+    """
+
+    def test_windows_uses_robocopy_with_move_flag(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from claude_repath import migrate
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        captured: dict = {}
+
+        class _Result:
+            returncode = 1  # robocopy "files copied" success
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **_kwargs):
+            captured["cmd"] = cmd
+            return _Result()
+
+        monkeypatch.setattr(migrate.subprocess, "run", fake_run)
+
+        migrate._cross_volume_move(tmp_path / "old", tmp_path / "new")
+
+        cmd = captured["cmd"]
+        assert cmd[0] == "robocopy"
+        assert "/MOVE" in cmd
+        assert "/E" in cmd
+        assert str(tmp_path / "old") in cmd
+        assert str(tmp_path / "new") in cmd
+
+    def test_windows_robocopy_failure_raises_physical_move_error(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from claude_repath import migrate
+
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        class _Result:
+            returncode = 16  # robocopy "serious error"
+            stdout = ""
+            stderr = "access denied"
+
+        monkeypatch.setattr(
+            migrate.subprocess, "run", lambda *_a, **_k: _Result()
+        )
+
+        with pytest.raises(PhysicalMoveError, match="robocopy exit code 16"):
+            migrate._cross_volume_move(tmp_path / "old", tmp_path / "new")
+
+    def test_unix_uses_shutil_move(self, tmp_path: Path, monkeypatch):
+        from claude_repath import migrate
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        calls: list[tuple[str, str]] = []
+
+        def spy_move(a, b):
+            calls.append((a, b))
+
+        monkeypatch.setattr(migrate.shutil, "move", spy_move)
+
+        migrate._cross_volume_move(tmp_path / "old", tmp_path / "new")
+
+        assert calls == [(str(tmp_path / "old"), str(tmp_path / "new"))]
 
 
 class TestRollbackE2E:

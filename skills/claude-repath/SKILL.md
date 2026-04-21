@@ -143,3 +143,4 @@ Six layers, automatically:
 - **Old path no longer exists but state remains**: use `rewire` (not `move`), which only touches state files.
 - **Target path already exists**: `move` will refuse — tell the user to pick a different target or move the existing folder out of the way first.
 - **Multiple worktrees under one project**: handled automatically by `--scope narrow`. No special flags needed.
+- **Python venv / node_modules will break after move** (v0.4.2+): `move` emits a non-blocking warning listing any `.venv` / `venv` / `node_modules` in the source. The physical move still succeeds, but the user must rebuild with their package manager (`uv sync` / `pip install -e .` / `npm ci` / etc.) — claude-repath cannot reliably auto-rebuild across every toolchain. Tell the user **before** they run `move` so they can plan the rebuild step.

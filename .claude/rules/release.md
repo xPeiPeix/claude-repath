@@ -1,0 +1,65 @@
+# Release Checklist
+
+每次发 release 严格按序执行。跳步 = 翻车（v0.5.0 PyPI demo 破图就是跳了 README 绝对 URL 校验）。
+
+## 1. 预检（改动前）
+
+- [ ] `git status` 干净，work tree clean、跟 `origin/main` 同步
+- [ ] 所有测试通过：`uv run pytest`
+- [ ] `uv run ruff check` 无告警
+
+## 2. 版本号同步（三处必改）
+
+- [ ] `pyproject.toml` → `[project].version`
+- [ ] `.claude-plugin/plugin.json` → `version`
+- [ ] `.claude-plugin/marketplace.json` → `plugins[0].version`
+
+三处必须完全一致。漏一处下游版本错乱（v0.3.2 → v0.4.0 升级时遗忘，两个 json 停在 0.3.2 直到 v0.4.1 才修，见 CHANGELOG v0.4.1）。
+
+## 3. CHANGELOG
+
+- [ ] `CHANGELOG.md` 新增 `## [X.Y.Z] — YYYY-MM-DD` 段落（Added / Changed / Fixed / Removed 分类）
+- [ ] 文末链接表更新：
+  - [ ] `[Unreleased]: .../compare/vX.Y.Z...HEAD` 指向最新版
+  - [ ] 新增 `[X.Y.Z]: .../compare/v<prev>...vX.Y.Z`
+
+## 4. README 校验
+
+- [ ] 所有 `![...](path)` 图片链接必须是 **绝对 URL**：`https://raw.githubusercontent.com/xPeiPeix/claude-repath/main/<file>`
+  - **禁止**相对路径 `./demo.gif` — PyPI 不渲染相对路径，破图（v0.5.0 翻车案例）
+- [ ] badges 链接指向正确的默认分支（`main`，不是 `master`）
+- [ ] Install 章节同时覆盖三条路径：PyPI CLI（uvx/pipx/pip）、Claude Code plugin（`/plugin marketplace add`）、skills.sh 生态（`npx skills add xPeiPeix/claude-repath`）
+
+## 5. Commit + Tag + Release（三步，不可合并）
+
+```bash
+# 5.1 commit（中文、≤50 字、禁止 Co-Authored-By 行）
+git add pyproject.toml .claude-plugin/ CHANGELOG.md README.md <其他改动>
+git commit -m "release vX.Y.Z: 一句话摘要"
+
+# 5.2 push
+git push origin main
+
+# 5.3 打 annotated tag 并 push
+git tag -a vX.Y.Z -m "Release X.Y.Z"
+git push origin vX.Y.Z
+
+# 5.4 创建 GitHub release（触发 publish.yml）
+gh release create vX.Y.Z \
+  --title "vX.Y.Z" \
+  --notes "$(awk '/^## \[X.Y.Z\]/{flag=1;next}/^## \[/{flag=0}flag' CHANGELOG.md)"
+```
+
+⚠️ **必须用 `gh release create`**（不是只 push tag）。`.github/workflows/publish.yml` 监听 `release: published` 事件，单独 push tag 不触发 PyPI 自动发布。
+
+## 6. 发布后验证
+
+- [ ] GitHub Actions publish.yml 绿灯：<https://github.com/xPeiPeix/claude-repath/actions/workflows/publish.yml>
+- [ ] PyPI 页面 demo.gif 正常显示、版本号更新：<https://pypi.org/project/claude-repath/>
+- [ ] `uvx --from claude-repath@X.Y.Z claude-repath --version` 拉到新版号
+- [ ] `npx skills add xPeiPeix/claude-repath -y` 能识别 `skills/claude-repath/SKILL.md` 并完成安装（贡献 skills.sh install 计数）
+
+## 踩过的坑
+
+1. **v0.5.0 PyPI demo 破图** — README 用相对路径 `./demo.gif`，PyPI 不解析 → v0.5.1 改绝对 raw URL 修复。**PyPI 不会追溯渲染旧版 README**，v0.5.0 页面永远破图，只能发新版让最新版恢复。
+2. **plugin.json / marketplace.json 版本遗忘** — v0.3.2 → v0.4.0 升级时两个 json 没同步 bump，停留在 0.3.2，直到 v0.4.1 才发现并修复（见 CHANGELOG v0.4.1 "Fixed" 末条）。第 2 节三处 checklist 就是为此设立。

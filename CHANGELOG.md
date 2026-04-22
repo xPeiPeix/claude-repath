@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-04-22
+
+### Fixed
+
+- **PyPI project page `demo.gif` broken image.** The README embedded
+  the demo GIF with a relative path (`./demo.gif`), which GitHub
+  auto-resolves to a raw URL but PyPI does not render — so the PyPI
+  page showed a broken-image icon instead of the wizard demo.
+  Replaced with the absolute
+  `https://raw.githubusercontent.com/xPeiPeix/claude-repath/main/demo.gif`
+  URL so the GIF renders identically on GitHub and PyPI. Note: PyPI
+  does not retroactively re-render old versions' README, so fixing
+  v0.5.0's already-published PyPI page requires publishing this
+  patch release.
+
+### Added
+
+- **`npx skills add xPeiPeix/claude-repath` install path** documented
+  in the "Install as a Claude Code plugin" section. Covers the
+  [skills.sh](https://skills.sh/) open-standard ecosystem
+  (`vercel-labs/skills` CLI), which discovers this repo's
+  `skills/claude-repath/SKILL.md` automatically and symlinks it into
+  any supported agent (Claude Code, Cursor, Codex, ~40 more) —
+  complementing the existing `/plugin marketplace add` path for
+  Claude Code-native installs.
+- `CLAUDE.md` + `.claude/rules/release.md` — project-level AI
+  behavior rules + a strict release checklist (three-file version bump
+  sync, CHANGELOG link-table, README absolute-URL guard, `gh release
+  create` requirement to trigger `publish.yml`, PyPI + skills.sh
+  post-publish verification). Lessons learned from v0.5.0's PyPI
+  demo-gif regression are pinned at the bottom of the checklist.
+
 ## [0.5.0] — 2026-04-22
 
 ### Added
@@ -294,7 +326,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.0...v0.4.1

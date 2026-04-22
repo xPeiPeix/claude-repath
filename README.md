@@ -7,7 +7,7 @@
 
 > Rewire Claude Code's local state when your project folder moves.
 
-![claude-repath wizard demo](./demo.gif)
+![claude-repath wizard demo](https://raw.githubusercontent.com/xPeiPeix/claude-repath/main/demo.gif)
 
 When you move or rename a project directory, Claude Code loses track of its sessions, memory, todos, and worktrees — because the absolute path is hardcoded in **four** different places. `claude-repath` patches all of them in one shot.
 
@@ -49,6 +49,12 @@ From inside Claude Code:
 ```text
 /plugin marketplace add xPeiPeix/claude-repath
 /plugin install claude-repath@claude-repath-marketplace
+```
+
+Or, from any terminal (uses the open [skills.sh](https://skills.sh/) ecosystem — Claude Code, Cursor, Codex, and [~40 more agents](https://github.com/vercel-labs/skills#available-agents)):
+
+```bash
+npx skills add xPeiPeix/claude-repath
 ```
 
 The plugin only ships a skill (a ~200-line guidance document). It does **not** bundle the CLI — you still install that via `uvx`/`pipx`/`pip` above, or let the skill guide Claude to run it via `uvx` on first use.

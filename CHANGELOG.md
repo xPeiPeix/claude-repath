@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-04-22
+
+### Added
+
+- **TUI picker visual overhaul.** `claude-repath move` (no-args
+  interactive mode) now opens with a grayscale `REPATH` ASCII splash
+  banner (figlet `ansi_shadow` font, per-line truecolor gradient from
+  `#f0f0f0` near-white down to `#404040` dark gray), gated on
+  `sys.stderr.isatty()` so pytest capture and pipes stay silent. Step
+  banners grow wizard icons — 📋 pick / 📍 locate / 🚀 confirm — to make
+  the flow scannable at a glance.
+- **Per-row status icons in the project picker**, rendered via
+  questionary's FormattedText (prompt_toolkit per-segment styling):
+  - 🟢 `active` — cwd resolved + folder exists + sessions ≥ 1 (green,
+    bold if sessions ≥ 10)
+  - 🔴 `orphan` — cwd resolved but the folder no longer exists on disk
+    (bold red); the primary migration candidate and the key signal this
+    release adds
+  - ⚪ `empty` — cwd resolved + folder exists + 0 sessions (fully dimmed)
+  - ❓ `unknown` — cwd unparseable from jsonl (yellow path, dim count)
+- **Legend bar** below the keyboard help line so first-time users can
+  decode the icons without guessing.
+- **Orphan detection** in `discover_projects`: each resolved cwd gets a
+  `Path(cwd).exists()` check, and the result is appended to the return
+  tuple. Answers the "which projects *actually* need migrating?"
+  question at a glance — previously every resolved row looked identical.
+- **Sort-rank rework** — precedence is now
+  `active > orphan > empty > unknown`. The user's daily-driver projects
+  stay at the top of the list, orphans sit just below (visible but not
+  crowding the head), empty shells and unparseable entries sink. Within
+  each rank, entries remain sorted case-insensitively by cwd.
+- New runtime dependency: `pyfiglet>=1.0` (banner generation).
+- 18 new pytest cases (178 total): `_choice_title` dispatch across the
+  four status branches, `_show_banner` TTY gating, `_gradient_hex` RGB
+  interpolation + clamp behavior, orphan detection in `discover_projects`,
+  rank-based sort precedence (active ahead of orphan regardless of
+  folder-name alphabet).
+
+### Changed
+
+- `discover_projects` return tuple widens from `(folder, cwd, sessions)`
+  to `(folder, cwd, sessions, cwd_exists)`. Internal consumer
+  (`pick_project`) was updated in the same commit; any external caller
+  unpacking the 3-tuple needs a trivial fix.
+- `_choice_title` signature gains `cwd_exists: bool` so the title
+  builder can dispatch the 🔴 orphan branch without doing filesystem IO
+  inside a render function.
+
 ## [0.4.2] — 2026-04-21
 
 ### Added
@@ -246,7 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.3.2...v0.4.0

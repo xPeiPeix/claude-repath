@@ -10,7 +10,19 @@ import json
 from pathlib import Path
 
 from claude_repath import tui
-from claude_repath.tui import _extract_cwd_from_sessions, _find_cwd, discover_projects
+from claude_repath.tui import (
+    _BANNER_GRADIENT_END,
+    _BANNER_GRADIENT_START,
+    _ICON_ACTIVE,
+    _ICON_EMPTY,
+    _ICON_ORPHAN,
+    _ICON_UNKNOWN,
+    _choice_title,
+    _extract_cwd_from_sessions,
+    _find_cwd,
+    _gradient_hex,
+    discover_projects,
+)
 
 
 class TestFindCwd:
@@ -146,13 +158,13 @@ class TestDiscoverProjects:
 
         result = discover_projects(projects)
 
-        names = {folder.name for folder, _cwd, _n in result}
+        names = {folder.name for folder, _cwd, _n, _exists in result}
         assert "D--dev-code-x" in names
         assert "D--dev-code-x--claude-worktrees-feat" not in names
         assert "D--dev-code-empty" in names
 
         # The x project should have the real cwd extracted.
-        cwds = {folder.name: cwd for folder, cwd, _n in result}
+        cwds = {folder.name: cwd for folder, cwd, _n, _exists in result}
         assert cwds["D--dev-code-x"] == r"D:\dev_code\x"
         assert cwds["D--dev-code-empty"].startswith("<unknown")
 
@@ -170,7 +182,7 @@ class TestDiscoverProjects:
             )
         result = discover_projects(projects)
         assert len(result) == 1
-        _folder, _cwd, n = result[0]
+        _folder, _cwd, n, _exists = result[0]
         assert n == 3
 
     def test_unknown_entries_sorted_to_bottom(self, tmp_path: Path):
@@ -188,7 +200,7 @@ class TestDiscoverProjects:
         unknown.mkdir()
 
         result = discover_projects(projects)
-        cwds = [cwd for _, cwd, _ in result]
+        cwds = [cwd for _, cwd, _, _ in result]
         # Resolved must come before unknown, even though unknown's encoded name
         # starts with "A" (would be first alphabetically by folder name).
         assert cwds[0] == r"D:\dev_code\resolved"
@@ -217,6 +229,85 @@ class TestDiscoverProjects:
         assert result[0][1] == "z_many"
         assert result[1][1].startswith("<unknown")
 
+    def test_existing_cwd_marked_present(self, tmp_path: Path):
+        """A resolved cwd pointing to a real directory gets ``cwd_exists=True``."""
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        realproj = tmp_path / "realproj"
+        realproj.mkdir()
+        enc = projects / "tmp--realproj"
+        enc.mkdir()
+        (enc / "s.jsonl").write_text(
+            json.dumps({"cwd": str(realproj)}) + "\n", encoding="utf-8"
+        )
+        result = discover_projects(projects)
+        assert len(result) == 1
+        _folder, cwd, _n, exists = result[0]
+        assert cwd == str(realproj)
+        assert exists is True
+
+    def test_missing_cwd_marked_orphan(self, tmp_path: Path):
+        """A resolved cwd whose folder no longer exists gets ``cwd_exists=False``.
+
+        This is the main migration trigger — state exists but the source
+        directory has been renamed/deleted, so Claude Code can no longer
+        reopen the project at its recorded path.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        ghost = projects / "D--ghost"
+        ghost.mkdir()
+        (ghost / "s.jsonl").write_text(
+            json.dumps({"cwd": str(tmp_path / "does-not-exist")}) + "\n",
+            encoding="utf-8",
+        )
+        result = discover_projects(projects)
+        assert len(result) == 1
+        _folder, _cwd, _n, exists = result[0]
+        assert exists is False
+
+    def test_unknown_entries_keep_exists_true(self, tmp_path: Path):
+        """``<unknown: ...>`` placeholders must not spuriously flag as orphan."""
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        empty = projects / "A--no-jsonls"
+        empty.mkdir()
+        result = discover_projects(projects)
+        _folder, cwd, _n, exists = result[0]
+        assert cwd.startswith("<unknown")
+        assert exists is True  # placeholder — skip orphan branch downstream
+
+    def test_active_sorted_before_orphan(self, tmp_path: Path):
+        """Active entries float above orphans so common work stays at the top.
+
+        Orphans are still visible (rank 1, just below active), but shouldn't
+        drown the head of the list when the user has many migrated folders.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        # Orphan: cwd points at a nonexistent folder. Encoded name starts
+        # with "A" so naive alphabetical sort would put it first — the rank
+        # must override that and push active above it.
+        orphan = projects / "A--orphan"
+        orphan.mkdir()
+        (orphan / "s.jsonl").write_text(
+            json.dumps({"cwd": str(tmp_path / "vanished")}) + "\n",
+            encoding="utf-8",
+        )
+        # Active: real folder exists under tmp_path.
+        realproj = tmp_path / "realproj"
+        realproj.mkdir()
+        active = projects / "Z--active"
+        active.mkdir()
+        (active / "s.jsonl").write_text(
+            json.dumps({"cwd": str(realproj)}) + "\n", encoding="utf-8"
+        )
+        result = discover_projects(projects)
+        _folder, _cwd, _n, first_exists = result[0]
+        _folder, _cwd, _n, second_exists = result[1]
+        assert first_exists is True  # active
+        assert second_exists is False  # orphan
+
     def test_resolved_entries_sorted_alphabetically_by_cwd(self, tmp_path: Path):
         """Within the resolved group, entries sort by cwd case-insensitively."""
         projects = tmp_path / "projects"
@@ -233,9 +324,121 @@ class TestDiscoverProjects:
         )
 
         result = discover_projects(projects)
-        cwds = [cwd for _, cwd, _ in result]
+        cwds = [cwd for _, cwd, _, _ in result]
         # 'apple_path' < 'Zebra_path' case-insensitively — apple first.
         assert cwds == ["apple_path", "Zebra_path"]
+
+
+class TestGradientHex:
+    """Per-line RGB interpolation that powers the cyan→pink banner gradient."""
+
+    def _expected(self, rgb: tuple[int, int, int]) -> str:
+        return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+    def test_t_zero_is_start_color(self):
+        assert _gradient_hex(0.0) == self._expected(_BANNER_GRADIENT_START)
+
+    def test_t_one_is_end_color(self):
+        assert _gradient_hex(1.0) == self._expected(_BANNER_GRADIENT_END)
+
+    def test_t_half_is_midpoint(self):
+        expected = tuple(
+            round((_BANNER_GRADIENT_START[i] + _BANNER_GRADIENT_END[i]) / 2)
+            for i in range(3)
+        )
+        assert _gradient_hex(0.5) == self._expected(expected)
+
+    def test_t_clamped_low(self):
+        assert _gradient_hex(-1.0) == self._expected(_BANNER_GRADIENT_START)
+
+    def test_t_clamped_high(self):
+        assert _gradient_hex(2.0) == self._expected(_BANNER_GRADIENT_END)
+
+
+class TestShowBanner:
+    """Banner is TUI-only decor — must be silent in non-TTY contexts."""
+
+    def test_skips_when_stderr_not_tty(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.stderr.isatty", lambda: False, raising=False)
+        tui._show_banner()
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert captured.out == ""
+
+    def test_renders_repath_art_when_tty(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+        # Force rich to actually emit into captured stderr (bypass terminal
+        # width detection that might strip color codes in CI).
+        tui._show_banner()
+        captured = capsys.readouterr()
+        # The ansi_shadow font renders REPATH using box-drawing glyphs — so
+        # we assert the box characters appear instead of pinning exact bytes.
+        assert "█" in captured.err
+        # Subtitle includes the version tag from ``__version__``.
+        assert "Rewire Claude Code state" in captured.err
+
+
+class TestChoiceTitle:
+    """Status-icon / coloring dispatch for each row of the Step-1 picker."""
+
+    def _icon(self, title: list[tuple[str, str]]) -> str:
+        # First segment is always "<icon>  " — strip trailing whitespace.
+        return title[0][1].strip()
+
+    def _cwd_style(self, title: list[tuple[str, str]]) -> str:
+        return title[1][0]
+
+    def _session_segment(self, title: list[tuple[str, str]]) -> tuple[str, str]:
+        # Order: [icon, cwd, "  [", session_label, "]"].
+        return title[3]
+
+    def test_active_project_gets_green_icon(self):
+        title = _choice_title(r"D:\dev_code\x", 5, cwd_exists=True)
+        assert self._icon(title) == _ICON_ACTIVE
+        assert self._cwd_style(title) == ""
+        style, text = self._session_segment(title)
+        assert "ansigreen" in style
+        assert text == "5 sessions"
+
+    def test_ten_sessions_gets_bold_green(self):
+        title = _choice_title(r"D:\dev_code\x", 73, cwd_exists=True)
+        style, text = self._session_segment(title)
+        assert "ansigreen" in style
+        assert "bold" in style
+        assert text == "73 sessions"
+
+    def test_zero_sessions_gets_empty_icon_and_dim_row(self):
+        title = _choice_title(r"D:\dev_code\empty", 0, cwd_exists=True)
+        assert self._icon(title) == _ICON_EMPTY
+        assert "ansibrightblack" in self._cwd_style(title)
+        style, _text = self._session_segment(title)
+        assert "ansibrightblack" in style
+
+    def test_unknown_cwd_gets_question_icon_and_yellow_path(self):
+        title = _choice_title("<unknown: D--foo>", 0, cwd_exists=True)
+        assert self._icon(title) == _ICON_UNKNOWN
+        assert "ansiyellow" in self._cwd_style(title)
+
+    def test_singular_session_label(self):
+        title = _choice_title(r"D:\x", 1, cwd_exists=True)
+        _style, text = self._session_segment(title)
+        assert text == "1 session"  # no trailing 's'
+
+    def test_orphan_gets_red_icon_when_folder_missing(self):
+        """Resolved cwd + missing folder — the primary migration candidate."""
+        title = _choice_title(r"D:\gone\forever", 5, cwd_exists=False)
+        assert self._icon(title) == _ICON_ORPHAN
+        assert "ansired" in self._cwd_style(title)
+        style, text = self._session_segment(title)
+        assert "ansired" in style
+        assert "bold" in style
+        assert text == "5 sessions"
+
+    def test_unknown_not_promoted_to_orphan_even_if_cwd_missing(self):
+        """``<unknown: ...>`` entries stay ❓ regardless of exists flag."""
+        title = _choice_title("<unknown: foo>", 0, cwd_exists=False)
+        assert self._icon(title) == _ICON_UNKNOWN
+        assert "ansiyellow" in self._cwd_style(title)
 
 
 class TestRunInteractiveMove:

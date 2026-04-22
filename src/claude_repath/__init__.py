@@ -1,3 +1,3 @@
 """claude-repath: migrate Claude Code project state when your project folder moves."""
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"

@@ -18,11 +18,13 @@ import json
 import sys
 from pathlib import Path
 
+import pyfiglet
 import questionary
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from . import __version__
 from .layers.base import MigrationContext
 from .migrate import PlanReport, plan_migration
 
@@ -35,25 +37,41 @@ STEPS_TOTAL = 3
 # cwd is on line 2-3.
 _MAX_LINES_PER_JSONL = 50
 
+# Wizard-step icons — clipboard (pick) → pin (locate) → rocket (go).
+_STEP_ICONS = {1: "📋", 2: "📍", 3: "🚀"}
 
-def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
-    """Return ``[(folder, resolved_cwd, session_count), ...]`` for top-level projects.
+# Project-status icons for the Step-1 menu. Emoji are self-colored so the
+# legend and list stay readable on both light and dark terminal themes.
+_ICON_ACTIVE = "🟢"
+_ICON_ORPHAN = "🔴"
+_ICON_EMPTY = "⚪"
+_ICON_UNKNOWN = "❓"
+
+
+def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int, bool]]:
+    """Return ``[(folder, resolved_cwd, session_count, cwd_exists), ...]``.
+
+    ``cwd_exists`` checks whether the resolved cwd still points at a real
+    directory on disk. Combined with ``session_count``, this classifies each
+    row into one of four visual states the picker renders:
+
+    =========  ============================================================
+    rank 0  🟢 active — cwd resolved, folder exists, sessions ≥ 1 (top)
+    rank 1  🔴 orphan — cwd resolved but folder gone (migration candidate)
+    rank 2  ⚪ empty  — cwd resolved, folder exists, sessions = 0
+    rank 3  ❓ unknown — cwd unparseable from jsonl
+    =========  ============================================================
 
     Worktree-derived folders (``...--claude-worktrees-...``) are excluded
     because they're migrated automatically with their parent project.
 
-    Results are ordered so the most useful entries float to the top:
-
-    1. Projects with a resolved cwd and at least one session (real work)
-    2. Projects with a resolved cwd but zero sessions (rare edge case)
-    3. Projects with ``<unknown: ...>`` placeholder cwd (empty shells)
-
-    Within each group entries are sorted alphabetically by cwd for
-    deterministic output.
+    For unresolved (``<unknown: ...>``) entries the ``cwd_exists`` flag is
+    irrelevant to sorting — we keep it ``True`` so ``unknown`` never falls
+    through the orphan branch in ``_choice_title``.
     """
     if not projects_dir.is_dir():
         return []
-    out: list[tuple[Path, str, int]] = []
+    out: list[tuple[Path, str, int, bool]] = []
     for sub in sorted(projects_dir.iterdir()):
         if not sub.is_dir():
             continue
@@ -62,10 +80,35 @@ def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int]]:
         cwd = _extract_cwd_from_sessions(sub)
         if cwd is None:
             cwd = f"<unknown: {sub.name}>"
+            cwd_exists = True  # placeholder — skip orphan rank
+        else:
+            try:
+                cwd_exists = Path(cwd).exists()
+            except OSError:
+                # Exotic path strings (long UNCs, reserved devices) can raise
+                # on ``.exists()``; treat as still-present rather than orphan
+                # to avoid false-positive migration nags.
+                cwd_exists = True
         sessions = sum(1 for _ in sub.glob("*.jsonl"))
-        out.append((sub, cwd, sessions))
-    out.sort(key=lambda t: (t[1].startswith("<unknown"), t[2] == 0, t[1].lower()))
+        out.append((sub, cwd, sessions, cwd_exists))
+    out.sort(key=lambda t: (_status_rank(t[1], t[2], t[3]), t[1].lower()))
     return out
+
+
+def _status_rank(cwd: str, sessions: int, cwd_exists: bool) -> int:
+    """Sort priority: active < orphan < empty < unknown (lower = higher in list).
+
+    Active projects float to the top since they're what the user actually
+    works in day-to-day; orphans are a secondary migration candidate and
+    sit just below so they're still visible without drowning the list head.
+    """
+    if cwd.startswith("<unknown"):
+        return 3
+    if not cwd_exists:
+        return 1  # orphan
+    if sessions == 0:
+        return 2  # empty
+    return 0  # active
 
 
 def _extract_cwd_from_sessions(project_dir: Path) -> str | None:
@@ -121,8 +164,49 @@ def _notify(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+# Banner gradient: top-to-bottom white → dark gray. Produces a clean
+# monochrome 3D-lit look that reads as sculpted block type (like skills.sh).
+# Rich has no native gradient, so we interpolate RGB per line and emit each
+# with a truecolor hex style. Modern terminals (Windows Terminal / iTerm2 /
+# GNOME Terminal / Warp) render truecolor fine.
+_BANNER_GRADIENT_START = (0xF0, 0xF0, 0xF0)  # near-white
+_BANNER_GRADIENT_END = (0x40, 0x40, 0x40)  # dark gray
+
+
+def _gradient_hex(t: float) -> str:
+    """Linear-interpolate banner gradient at parameter ``t`` ∈ [0, 1]."""
+    t = max(0.0, min(1.0, t))
+    r = round(_BANNER_GRADIENT_START[0] + (_BANNER_GRADIENT_END[0] - _BANNER_GRADIENT_START[0]) * t)
+    g = round(_BANNER_GRADIENT_START[1] + (_BANNER_GRADIENT_END[1] - _BANNER_GRADIENT_START[1]) * t)
+    b = round(_BANNER_GRADIENT_START[2] + (_BANNER_GRADIENT_END[2] - _BANNER_GRADIENT_START[2]) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _show_banner() -> None:
+    """Render the REPATH splash on TUI entry.
+
+    Skipped when stderr isn't a TTY (pytest capture, pipes) — the ASCII art
+    is ~7×50 chars and would bloat non-interactive logs. Uses the
+    ``ansi_shadow`` figlet font with a per-line cyan→pink truecolor gradient.
+    """
+    if not sys.stderr.isatty():
+        return
+    art = pyfiglet.figlet_format("REPATH", font="ansi_shadow").rstrip("\n")
+    lines = art.split("\n")
+    steps = max(1, len(lines) - 1)
+    for i, line in enumerate(lines):
+        _console.print(line, style=f"bold {_gradient_hex(i / steps)}", highlight=False)
+    _console.print(
+        f"[dim]Rewire Claude Code state when your project folder moves  "
+        f"[cyan]v{__version__}[/cyan][/dim]"
+    )
+    _console.print()
+
+
 def _step_banner(step: int, title: str, subtitle: str | None = None) -> None:
-    body = f"[bold]{title}[/bold]"
+    icon = _STEP_ICONS.get(step, "")
+    heading = f"{icon}  {title}" if icon else title
+    body = f"[bold]{heading}[/bold]"
     if subtitle:
         body += f"\n[dim]{subtitle}[/dim]"
     _console.print(
@@ -140,6 +224,57 @@ def _help_bar(keys: list[tuple[str, str]]) -> None:
     _console.print("   " + "   ".join(parts), style="dim")
 
 
+def _legend_bar() -> None:
+    """Render a short legend explaining the status icons used in the picker."""
+    _console.print(
+        f"   {_ICON_ACTIVE} [green]active[/green]"
+        f"   {_ICON_ORPHAN} [red]orphan[/red]"
+        f"   {_ICON_EMPTY} [dim]empty[/dim]"
+        f"   {_ICON_UNKNOWN} [yellow]unknown[/yellow]"
+    )
+
+
+def _choice_title(cwd: str, sessions: int, cwd_exists: bool) -> list[tuple[str, str]]:
+    """Build a prompt_toolkit FormattedText title for one picker entry.
+
+    Returns a list of ``(style, text)`` tuples. ``style`` uses prompt_toolkit
+    syntax (``fg:ansigreen``, ``fg:ansibrightblack bold``, ...), not rich
+    markup — questionary passes the list straight to prompt_toolkit.
+
+    Dispatch (unknown wins over orphan so unparseable rows stay ❓, not 🔴):
+        * ``<unknown: ...>`` placeholder → ❓ yellow cwd, dim count
+        * resolved cwd + folder missing   → 🔴 red cwd + bold red count
+        * resolved cwd + 0 sessions       → ⚪ fully dimmed row
+        * resolved cwd + sessions ≥ 1     → 🟢 + green count (bold if ≥ 10)
+    """
+    is_unknown = cwd.startswith("<unknown")
+    if is_unknown:
+        icon = _ICON_UNKNOWN
+        cwd_style = "fg:ansiyellow"
+        session_style = "fg:ansibrightblack"
+    elif not cwd_exists:
+        icon = _ICON_ORPHAN
+        cwd_style = "fg:ansired"
+        session_style = "fg:ansired bold"
+    elif sessions == 0:
+        icon = _ICON_EMPTY
+        cwd_style = "fg:ansibrightblack"
+        session_style = "fg:ansibrightblack"
+    else:
+        icon = _ICON_ACTIVE
+        cwd_style = ""
+        session_style = "fg:ansigreen bold" if sessions >= 10 else "fg:ansigreen"
+
+    session_label = f"{sessions} session{'s' if sessions != 1 else ''}"
+    return [
+        ("", f"{icon}  "),
+        (cwd_style, cwd),
+        ("", "  ["),
+        (session_style, session_label),
+        ("", "]"),
+    ]
+
+
 def pick_project(projects_dir: Path) -> str | None:
     """Step 1/3: show project list, return chosen project's cwd or ``None``."""
     _step_banner(1, "Pick a project to migrate")
@@ -148,13 +283,11 @@ def pick_project(projects_dir: Path) -> str | None:
         _notify(f"No projects found under {projects_dir}")
         return None
     choices = [
-        questionary.Choice(
-            title=f"{cwd}  [{n} session{'s' if n != 1 else ''}]",
-            value=cwd,
-        )
-        for _folder, cwd, n in entries
+        questionary.Choice(title=_choice_title(cwd, n, exists), value=cwd)
+        for _folder, cwd, n, exists in entries
     ]
     _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
+    _legend_bar()
     return questionary.select(
         "Which project do you want to relocate?",
         choices=choices,
@@ -254,6 +387,7 @@ def run_interactive_move(
     internally, so ``cli.py`` should skip re-printing the plan for TUI
     sessions.
     """
+    _show_banner()
     old = pick_project(projects_dir)
     if not old:
         return None

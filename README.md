@@ -93,7 +93,9 @@ claude-repath rollback 20260419-155331
 
 ## What gets migrated
 
-| # | Layer | Handled |
+Legend: **✅** fully handled · **⚠️** physically moved but needs manual rebuild · **⏳** backlog
+
+| # | Layer | Status |
 |---|---|:---:|
 | 1 | Physical project folder (`mv`) | ✅ |
 | 2 | `~/.claude/projects/<encoded>/` directory name | ✅ |
@@ -101,7 +103,11 @@ claude-repath rollback 20260419-155331
 | 4 | `~/.claude.json` — `projects` key | ✅ |
 | 5 | Worktree-derived project folders (auto-discovered) | ✅ |
 | 6 | `~/.claude/git-worktrees.json` (if present) | ✅ |
-| 7 | Chromium `Local Storage/leveldb` entries (Desktop app) | ⏳ backlog |
+| 7 | Python `.venv/` / `venv/` — rebuild after move ([why & how](#known-limitations)) | ⚠️ |
+| 8 | `node_modules/` — rebuild after move ([why & how](#known-limitations)) | ⚠️ |
+| 9 | Chromium `Local Storage/leveldb` entries (Desktop app) | ⏳ backlog |
+
+> ⚠️ rows: `move` physically relocates these directories, but their internal binaries/shims embed absolute paths and stop working until you rebuild with the original package manager. `claude-repath` detects them pre-flight and prints a non-blocking warning — see [Known limitations](#known-limitations) for the exact rebuild commands.
 
 ---
 

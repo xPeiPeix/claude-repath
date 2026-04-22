@@ -8,13 +8,22 @@
 - [ ] 所有测试通过：`uv run pytest`
 - [ ] `uv run ruff check` 无告警
 
-## 2. 版本号同步（三处必改）
+## 2. 版本号同步（**四处**必改，缺一不可）
 
-- [ ] `pyproject.toml` → `[project].version`
-- [ ] `.claude-plugin/plugin.json` → `version`
-- [ ] `.claude-plugin/marketplace.json` → `plugins[0].version`
+- [ ] `pyproject.toml` → `[project].version`（PyPI 发布源）
+- [ ] `src/claude_repath/__init__.py` → `__version__`（CLI `--version` 命令输出源）
+- [ ] `.claude-plugin/plugin.json` → `version`（Claude Code plugin 版本）
+- [ ] `.claude-plugin/marketplace.json` → `plugins[0].version`（marketplace 清单）
 
-三处必须完全一致。漏一处下游版本错乱（v0.3.2 → v0.4.0 升级时遗忘，两个 json 停在 0.3.2 直到 v0.4.1 才修，见 CHANGELOG v0.4.1）。
+四处必须完全一致。漏改教训：
+- v0.3.2 → v0.4.0：两个 json 停在 0.3.2，直到 v0.4.1 修复
+- v0.5.1：`__init__.py` 漏改，PyPI 版本正确但 `claude-repath --version` 输出 0.5.0，v0.5.2 紧急补发修复
+
+**一键验证**：
+```bash
+grep -Hn "version\|__version__" pyproject.toml src/claude_repath/__init__.py .claude-plugin/*.json
+# 输出四行必须是同一版本号
+```
 
 ## 3. CHANGELOG
 

@@ -1,6 +1,6 @@
 [project]
 name = "claude-repath"
-version = "0.5.1"
+version = "0.5.2"
 description = "Migrate Claude Code project state when your project folder moves — rewires cwd paths across sessions, ~/.claude.json, and worktrees."
 readme = "README.md"
 license = "MIT"

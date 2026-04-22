@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-04-22
+
+### Fixed
+
+- **`claude-repath --version` reported stale 0.5.0 on 0.5.1 install.**
+  v0.5.1 synced three version-number locations (`pyproject.toml`,
+  `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`) but
+  missed a fourth: `src/claude_repath/__init__.py`'s `__version__`
+  constant, which is what `typer`'s `--version` callback reads. Result:
+  PyPI shipped 0.5.1 code, but `claude-repath --version` printed
+  `0.5.0` — harmless but misleading. v0.5.2 bumps the fourth location.
+
+### Changed
+
+- **Release checklist expanded from three to four version-number
+  locations.** `CLAUDE.md` + `.claude/rules/release.md` now both pin
+  the complete four-file bump (adds `src/claude_repath/__init__.py`
+  explicitly), with a copy-paste `grep` one-liner for post-bump
+  verification. Lesson pinned at the bottom of the checklist so the
+  next agent does not repeat v0.5.1's mistake.
+
 ## [0.5.1] — 2026-04-22
 
 ### Fixed
@@ -326,7 +347,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.1...v0.4.2

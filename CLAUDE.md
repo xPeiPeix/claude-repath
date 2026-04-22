@@ -7,7 +7,13 @@ the skills.sh open-standard ecosystem.
 ## 硬约束
 
 - 必须用 `uv sync --all-groups` 安装开发依赖（不用 `pip install -e .`，`uv_build` 是唯一受支持的 build backend）
-- 每次 release 必须同步 bump **三处**版本号：`pyproject.toml` / `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json`（漏一处下游版本错乱，v0.3.2 → v0.4.0 踩过）
+- 每次 release 必须同步 bump **四处**版本号，**缺一不可**：
+  1. `pyproject.toml` → `[project].version`（PyPI 发布源）
+  2. `src/claude_repath/__init__.py` → `__version__`（CLI `--version` 命令输出源）
+  3. `.claude-plugin/plugin.json` → `version`（Claude Code plugin 版本）
+  4. `.claude-plugin/marketplace.json` → `plugins[0].version`（marketplace 清单）
+
+  漏任何一处都会翻车：v0.3.2 → v0.4.0 漏了 plugin.json/marketplace.json；v0.5.1 漏了 `__init__.py` 导致 PyPI 版本号正确但 `claude-repath --version` 输出错版本。验证命令：`grep -rn "version" pyproject.toml src/claude_repath/__init__.py .claude-plugin/`
 - README 所有图片链接必须用 **绝对 URL**（`https://raw.githubusercontent.com/xPeiPeix/claude-repath/main/<file>`）。**禁止**相对路径——PyPI 不渲染相对路径，破图（v0.5.0 踩过）
 
 ## 关键路径

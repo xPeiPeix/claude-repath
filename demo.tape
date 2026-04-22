@@ -1,13 +1,18 @@
 # =============================================================================
-# claude-repath v0.3 — TUI wizard demo (Linux render)
+# claude-repath v0.5 — TUI wizard demo (Linux render)
 #
 # Tool:      https://github.com/charmbracelet/vhs
-# Reqs:      vhs 0.11+, ttyd 1.7+, ffmpeg 4+, claude-repath (via `uv tool install`)
+# Reqs:      vhs 0.11+, ttyd 1.7+, ffmpeg 4+, claude-repath (via pipx/pip --user)
 # Regen:     bash setup-demo.sh && vhs demo.tape
 # Outputs:   demo.gif (README embed) + demo.mp4 (social / blog)
 #
 # Why Linux-shaped paths? vhs runs best on Linux (Windows has no native ttyd).
 # The CLI itself supports Windows paths first-class — see README for examples.
+#
+# v0.5 highlights on display:
+#   * grayscale REPATH ASCII banner at splash
+#   * wizard-step icons (📋 / 📍 / 🚀)
+#   * 4-state picker with 🟢 / 🔴 / ⚪ / ❓ icons + legend bar
 # =============================================================================
 
 Output demo.gif
@@ -36,16 +41,17 @@ Enter
 Show
 
 # ---- Intro comment ---------------------------------------------------------
-Type "# claude-repath — relocate Claude Code projects without losing state"
+Type "# claude-repath v0.5 — relocate Claude Code projects without losing state"
 Sleep 2s
 Ctrl+U
 
 # ---- Launch the interactive wizard -----------------------------------------
 Type "claude-repath move"
 Enter
-Sleep 2500ms
+# Give viewers time to read the REPATH banner + legend + the 4-status list
+Sleep 5s
 
-# ---- Step 1/3: pick project (only one in the mock state) -------------------
+# ---- Step 1/3: pick project (default highlight = top active entry) ---------
 Enter
 Sleep 2s
 

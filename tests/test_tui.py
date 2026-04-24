@@ -584,10 +584,15 @@ class TestPromptNewPath:
     ) -> None:
         """Replace questionary calls with deterministic answers.
 
+        The stub Question objects implement both ``ask`` (used by the
+        parent-creation confirm) and ``unsafe_ask`` (used by v0.8+
+        ``_ask_with_back`` for the parent / name inputs), so the same
+        helper works with both styles.
+
         ``action`` controls the Step-2 action menu verdict. Default
-        ``"confirm"`` preserves pre-v0.7 test semantics: after entering
-        parent + name, the user confirms. Pass ``"back"`` / ``"cancel"``
-        / ``"edit"`` to exercise the other branches.
+        ``"confirm"`` preserves the pre-v0.7 test semantics. Pass
+        ``"back"`` / ``"cancel"`` / ``"edit"`` / :data:`_BACK` to
+        exercise the other branches.
         """
 
         class _StubPath:
@@ -595,6 +600,9 @@ class TestPromptNewPath:
                 self._val = val
 
             def ask(self):
+                return self._val
+
+            def unsafe_ask(self):
                 return self._val
 
         class _StubText(_StubPath):
@@ -629,6 +637,9 @@ class TestPromptNewPath:
             def ask(self):
                 return str(existing)
 
+            def unsafe_ask(self):
+                return str(existing)
+
         class _T:
             def __init__(self, default):
                 captured["default"] = default
@@ -636,7 +647,10 @@ class TestPromptNewPath:
             def ask(self):
                 return "renamed"
 
-        def fake_text(_msg, default=""):
+            def unsafe_ask(self):
+                return "renamed"
+
+        def fake_text(_msg, default="", **_kwargs):
             return _T(default)
 
         monkeypatch.setattr(q, "path", lambda *a, **k: _P())
@@ -683,8 +697,14 @@ class TestPromptNewPath:
             def ask(self):
                 return "~"
 
+            def unsafe_ask(self):
+                return "~"
+
         class _T:
             def ask(self):
+                return "foo"
+
+            def unsafe_ask(self):
                 return "foo"
 
         class _C:
@@ -732,6 +752,9 @@ class TestPromptNewPath:
             def ask(self):
                 return self._val
 
+            def unsafe_ask(self):
+                return self._val
+
         import questionary as q
 
         monkeypatch.setattr(q, "path", lambda *a, **k: _StubVal(str(existing)))
@@ -741,6 +764,66 @@ class TestPromptNewPath:
 
         out = tui.prompt_new_path(str(tmp_path / "old"))
         assert out == str(existing / "proj")
+
+    def test_esc_at_parent_returns_back_sentinel(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """Esc at the parent input propagates :data:`_BACK` to Step 1."""
+        # Stub questionary constructors so Question creation doesn't try
+        # to open a real Windows console in the test environment.
+        import questionary as q
+
+        class _FakeQ:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def ask(self):
+                return None
+
+            def unsafe_ask(self):
+                return None
+
+        monkeypatch.setattr(q, "path", _FakeQ)
+        monkeypatch.setattr(q, "text", _FakeQ)
+        # Sequence: parent → _BACK (Esc), other prompts never reached.
+        monkeypatch.setattr(tui, "_ask_with_back", lambda _q: _BACK)
+        assert tui.prompt_new_path(str(tmp_path / "old")) == _BACK
+
+    def test_esc_at_name_loops_back_to_parent(self, monkeypatch, tmp_path: Path):
+        """Esc at the name input re-opens the parent prompt (inner loop)."""
+        existing = tmp_path / "dest"
+        existing.mkdir()
+
+        import questionary as q
+
+        class _FakeQ:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def ask(self):
+                return None
+
+            def unsafe_ask(self):
+                return None
+
+        monkeypatch.setattr(q, "path", _FakeQ)
+        monkeypatch.setattr(q, "text", _FakeQ)
+        # Sequence: parent=existing, name→_BACK, parent=existing, name="proj".
+        answers = iter([str(existing), _BACK, str(existing), "proj"])
+        monkeypatch.setattr(tui, "_ask_with_back", lambda _q: next(answers))
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "confirm")
+
+        out = tui.prompt_new_path(str(tmp_path / "old"))
+        assert out == str(existing / "proj")
+
+    def test_esc_at_action_menu_treated_as_back(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """When the action menu returns :data:`_BACK` (Esc), propagate it."""
+        existing = tmp_path / "dest"
+        existing.mkdir()
+        self._stub(monkeypatch, parent=str(existing), name="proj", action=_BACK)
+        assert tui.prompt_new_path(str(tmp_path / "old")) == _BACK
 
 
 class TestGroupByStatus:
@@ -791,6 +874,9 @@ class TestPickProject:
                 captured["choices_seen"] = len(kwargs.get("choices", []))
 
             def ask(self):
+                return return_value
+
+            def unsafe_ask(self):
                 return return_value
 
         import questionary as q
@@ -865,3 +951,101 @@ class TestPickProject:
         monkeypatch.setattr(tui, "_pick_status_filter", should_not_be_called)
         assert tui.pick_project(projects) is None
         assert called["count"] == 0
+
+    def test_esc_at_project_list_loops_back_to_filter(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """Esc at Step 1b returns to Step 1a instead of cancelling the flow.
+
+        Simulates user pressing Esc at the project list (first pass) then
+        re-selecting a filter and picking normally (second pass). The
+        filter stage should be re-entered exactly once.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        real = tmp_path / "real"
+        real.mkdir()
+        enc = projects / "D--x"
+        enc.mkdir()
+        (enc / "s.jsonl").write_text(
+            json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+        )
+
+        filter_calls = {"count": 0}
+
+        def fake_filter(_b):
+            filter_calls["count"] += 1
+            return "all"
+
+        # First _ask_with_back returns _BACK (Esc), second returns a real cwd.
+        results = iter([_BACK, "picked_cwd"])
+        # Stub questionary.select so constructing the Question doesn't try
+        # to open a Windows console in the test environment.
+        import questionary as q
+
+        class _FakeQ:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def ask(self):
+                return None
+
+            def unsafe_ask(self):
+                return None
+
+        monkeypatch.setattr(q, "select", _FakeQ)
+        monkeypatch.setattr(tui, "_pick_status_filter", fake_filter)
+        monkeypatch.setattr(tui, "_ask_with_back", lambda _q: next(results))
+
+        result = tui.pick_project(projects)
+        assert filter_calls["count"] == 2  # re-entered filter after Esc
+        assert result == "picked_cwd"
+
+
+class TestAskWithBack:
+    """Exception-to-sentinel translation used by the Esc key binding.
+
+    Pinning the mapping here (instead of just testing callers) so future
+    changes to prompt_toolkit exception semantics don't silently break
+    the Esc=back UX.
+    """
+
+    def test_escback_translates_to_back(self):
+        from claude_repath.tui import _BACK, _ask_with_back, _EscBackError
+
+        class _Q:
+            def unsafe_ask(self):
+                raise _EscBackError()
+
+        assert _ask_with_back(_Q()) == _BACK
+
+    def test_keyboard_interrupt_translates_to_none(self):
+        from claude_repath.tui import _ask_with_back
+
+        class _Q:
+            def unsafe_ask(self):
+                raise KeyboardInterrupt()
+
+        assert _ask_with_back(_Q()) is None
+
+    def test_normal_value_passes_through(self):
+        from claude_repath.tui import _ask_with_back
+
+        class _Q:
+            def unsafe_ask(self):
+                return "picked_value"
+
+        assert _ask_with_back(_Q()) == "picked_value"
+
+    def test_other_exceptions_propagate(self):
+        """Unexpected exceptions must bubble, not be silently swallowed."""
+        import pytest as _pt
+
+        from claude_repath.tui import _ask_with_back
+
+        class _Q:
+            def unsafe_ask(self):
+                raise RuntimeError("unexpected")
+
+        with _pt.raises(RuntimeError, match="unexpected"):
+            _ask_with_back(_Q())

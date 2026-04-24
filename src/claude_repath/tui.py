@@ -51,6 +51,76 @@ _ICON_UNKNOWN = "❓"
 # step" — distinct from ``None``, which still means "cancel the whole flow".
 _BACK = "__back__"
 
+
+class _EscBackError(Exception):
+    """Raised from a prompt key binding when the user presses Esc.
+
+    Caught by :func:`_ask_with_back` and translated into the :data:`_BACK`
+    sentinel so step functions treat Esc as a keyboard shortcut for their
+    menu's "Back" option — cross-platform by way of prompt_toolkit's
+    Esc-key recognition.
+    """
+
+
+def _esc_back_kb():
+    """``KeyBindings`` that raise :class:`_EscBackError` on a single Esc press.
+
+    ``eager=True`` bypasses prompt_toolkit's escape-timeout (500 ms default
+    wait for a possible Alt-<key> combo). The TUI doesn't use any Alt-<key>
+    shortcuts, so the trade is: instant Esc response for losing Alt combos.
+    """
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
+
+    kb = KeyBindings()
+
+    @kb.add(Keys.Escape, eager=True)
+    def _on_escape(event):
+        event.app.exit(exception=_EscBackError())
+
+    return kb
+
+
+def _attach_esc_back(question):
+    """Merge an Esc-binds-to-_EscBackError handler onto ``question``'s existing bindings.
+
+    Why not ``questionary.xxx(key_bindings=_esc_back_kb())``: ``questionary.path``
+    and ``questionary.text`` already pass their own ``key_bindings`` arg into
+    ``PromptSession(...)``, so adding another via the user-facing kwargs
+    raises ``TypeError: multiple values for keyword argument 'key_bindings'``.
+    Instead we reach into the constructed Question, fetch its Application's
+    ``key_bindings``, and merge our Esc handler on top.
+
+    Stubs in tests (non-Question objects) are silently left untouched — the
+    function returns the original ``question`` in both cases so callers can
+    chain it into ``_ask_with_back``.
+    """
+    from prompt_toolkit.key_binding import merge_key_bindings
+
+    app = getattr(question, "application", None)
+    if app is None:
+        return question  # test stub without a real prompt_toolkit Application
+    existing = app.key_bindings
+    app.key_bindings = merge_key_bindings([existing, _esc_back_kb()])
+    return question
+
+
+def _ask_with_back(question):
+    """Run a questionary prompt; translate Esc → :data:`_BACK`, Ctrl+C → ``None``.
+
+    Automatically attaches the Esc handler via :func:`_attach_esc_back` so
+    callers don't need to remember to wire it themselves. Uses ``unsafe_ask``
+    rather than ``ask`` so questionary's default ``KeyboardInterrupt``
+    swallowing doesn't hide :class:`_EscBackError` alongside it.
+    """
+    _attach_esc_back(question)
+    try:
+        return question.unsafe_ask()
+    except _EscBackError:
+        return _BACK
+    except KeyboardInterrupt:
+        return None
+
 # Status keys (in display order for the Step-1a filter menu), paired with
 # the rank numbers emitted by ``_status_rank``. Centralized so the filter
 # menu / bucket dict / icon lookup share one source of truth.
@@ -183,14 +253,19 @@ def _pick_status_filter(
 
 
 def _ask_action(prompt: str, choices: list[tuple[str, str]]) -> str | None:
-    """Present a simple ``(label, value)`` action menu and return the value.
+    """Present a ``(label, value)`` action menu and return the chosen value.
 
-    Wraps ``questionary.select`` so the Step-2 / Step-3 action menus share a
-    single call site and tests can stub one Python function instead of
-    mocking questionary internals.
+    Wraps ``questionary.select`` with Esc-aware key bindings. Returns:
+        * A value from ``choices`` → user made a pick
+        * :data:`_BACK` → user pressed Esc (equivalent to the menu's Back item)
+        * ``None`` → user pressed Ctrl+C
+
+    Callers that already have a dedicated "back" choice in ``choices``
+    should treat the returned value and :data:`_BACK` identically.
     """
     qs_choices = [questionary.Choice(title=t, value=v) for t, v in choices]
-    return questionary.select(prompt, choices=qs_choices).ask()
+    question = questionary.select(prompt, choices=qs_choices)
+    return _ask_with_back(question)
 
 
 def _extract_cwd_from_sessions(project_dir: Path) -> str | None:
@@ -366,8 +441,11 @@ def pick_project(projects_dir: Path) -> str | None:
     lists only projects from the chosen bucket, so users with hundreds of
     projects don't have to page through everything to find one type.
 
-    Returns the selected project's cwd, or ``None`` on cancel at either
-    sub-step.
+    Pressing Esc inside Step 1b jumps back to Step 1a — useful when the
+    user realizes they picked the wrong status bucket and wants to widen
+    or switch categories without Ctrl+C-ing out of the flow.
+
+    Returns the selected project's cwd, or ``None`` on cancel.
     """
     _step_banner(1, "Pick a project to migrate")
     entries = discover_projects(projects_dir)
@@ -379,24 +457,37 @@ def pick_project(projects_dir: Path) -> str | None:
     _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
     _legend_bar()
 
-    filter_key = _pick_status_filter(buckets)
-    if filter_key is None:
-        return None
+    while True:
+        filter_key = _pick_status_filter(buckets)
+        if filter_key is None:
+            return None
 
-    filtered = entries if filter_key == "all" else buckets[filter_key]
-    if not filtered:
-        _notify(f"No '{filter_key}' projects to pick.")
-        return None
+        filtered = entries if filter_key == "all" else buckets[filter_key]
+        if not filtered:
+            _notify(f"No '{filter_key}' projects to pick.")
+            continue
 
-    choices = [
-        questionary.Choice(title=_choice_title(cwd, n, exists), value=cwd)
-        for _folder, cwd, n, exists in filtered
-    ]
-    _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
-    return questionary.select(
-        "Which project do you want to relocate?",
-        choices=choices,
-    ).ask()
+        choices = [
+            questionary.Choice(title=_choice_title(cwd, n, exists), value=cwd)
+            for _folder, cwd, n, exists in filtered
+        ]
+        _help_bar(
+            [
+                ("↑↓", "navigate"),
+                ("Enter", "select"),
+                ("Esc", "back to filter"),
+                ("Ctrl+C", "cancel"),
+            ]
+        )
+        result = _ask_with_back(
+            questionary.select(
+                "Which project do you want to relocate?",
+                choices=choices,
+            )
+        )
+        if result == _BACK:
+            continue  # re-open the filter menu
+        return result
 
 
 def prompt_new_path(old_path: str) -> str | None:
@@ -407,10 +498,14 @@ def prompt_new_path(old_path: str) -> str | None:
         * ``None`` → user cancelled the whole flow
         * :data:`_BACK` → user asked to go back to Step 1 (re-pick project)
 
-    After entering parent+name the user sees a Source→Target preview panel
-    and an action menu (Continue / Edit / Back / Cancel). ``Edit`` loops
-    back to re-enter fields with last inputs retained as defaults, so a
-    typo in one field doesn't force re-typing the other.
+    Esc bindings speed up in-flow navigation without menu clicks:
+        * Esc at the parent field → return :data:`_BACK` (jumps to Step 1)
+        * Esc at the name field   → loop back to re-enter parent (inner)
+        * Esc at the action menu  → equivalent to choosing "Back"
+
+    ``Edit`` in the action menu loops back to re-enter fields with last
+    inputs retained as defaults, so a typo in one field doesn't force
+    re-typing the other.
     """
     old = Path(old_path)
     current_parent = str(old.parent)
@@ -422,21 +517,36 @@ def prompt_new_path(old_path: str) -> str | None:
             "Choose the new location",
             subtitle=f"Moving from:  {old_path}",
         )
-        _help_bar([("Tab", "complete"), ("Enter", "next"), ("Ctrl+C", "cancel")])
+        _help_bar(
+            [
+                ("Tab", "complete"),
+                ("Enter", "next"),
+                ("Esc", "back"),
+                ("Ctrl+C", "cancel"),
+            ]
+        )
 
-        parent_input = questionary.path(
-            "New parent directory:",
-            default=current_parent,
-            only_directories=True,
-        ).ask()
+        parent_input = _ask_with_back(
+            questionary.path(
+                "New parent directory:",
+                default=current_parent,
+                only_directories=True,
+            )
+        )
+        if parent_input == _BACK:
+            return _BACK  # Esc at parent → jump to Step 1
         if parent_input is None or not parent_input.strip():
             return None
         current_parent = parent_input.strip()
 
-        name_input = questionary.text(
-            "New project name:",
-            default=current_name,
-        ).ask()
+        name_input = _ask_with_back(
+            questionary.text(
+                "New project name:",
+                default=current_name,
+            )
+        )
+        if name_input == _BACK:
+            continue  # Esc at name → re-enter parent (inner loop)
         if name_input is None or not name_input.strip():
             return None
         current_name = name_input.strip()
@@ -458,7 +568,9 @@ def prompt_new_path(old_path: str) -> str | None:
 
         if action is None or action == "cancel":
             return None
-        if action == "back":
+        if action == "back" or action == _BACK:
+            # Menu "Back" and Esc (which _ask_action turns into _BACK) are
+            # two input paths to the same outcome — bubble up to Step 1.
             return _BACK
         if action == "edit":
             continue
@@ -578,7 +690,14 @@ def run_interactive_move(
             _notify(f"Planning failed: {exc}")
             return None
         _print_preview(old, new, plan)
-        _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
+        _help_bar(
+            [
+                ("↑↓", "navigate"),
+                ("Enter", "select"),
+                ("Esc", "back"),
+                ("Ctrl+C", "cancel"),
+            ]
+        )
 
         action = _ask_action(
             "Proceed with migration?",
@@ -591,7 +710,8 @@ def run_interactive_move(
 
         if action is None or action == "cancel":
             return None
-        if action == "back":
+        if action == "back" or action == _BACK:
+            # Menu "Back" and Esc both rewind one step.
             new = None
             continue
         # action == "proceed"

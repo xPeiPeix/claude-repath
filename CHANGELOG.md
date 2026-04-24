@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-04-24
+
+### Added
+
+- **Esc = Back shortcut throughout the wizard.** Pressing Esc at any
+  interactive prompt jumps back one step instead of being a no-op. The
+  four hop-points:
+  - Step 1b (project list) → **back to Step 1a (filter menu)** — lets
+    you widen or switch category without Ctrl+C-ing the whole flow
+  - Step 2 parent field → **back to Step 1** (re-pick project)
+  - Step 2 name field → **back to the parent field** (retains parent,
+    just re-enter name)
+  - Step 2 / Step 3 action menus → **equivalent to choosing "Back"**
+  The help bar in every step now shows `Esc back` so the shortcut is
+  discoverable without reading docs.
+- New module-level helpers in `claude_repath.tui`:
+  - `_EscBackError` — custom exception raised from the Esc key binding
+  - `_esc_back_kb()` — prompt_toolkit KeyBindings instance with an
+    eager Escape handler (fires on the single keystroke, no 500 ms
+    wait for Alt-<key> combos we don't use)
+  - `_attach_esc_back(question)` — merges the Esc handler onto a
+    questionary Question's existing bindings after construction
+    (workaround for `questionary.path` / `text` passing their own
+    `key_bindings` kwarg to PromptSession, which blocks the usual
+    "add as a kwarg" path)
+  - `_ask_with_back(question)` — runs the prompt's `unsafe_ask` and
+    translates `_EscBackError` → :data:`_BACK`, KeyboardInterrupt →
+    None, everything else propagates
+- 8 new pytest cases in `test_tui.py` (200 total, up from 192):
+  `_ask_with_back` exception-to-sentinel mapping (EscBackError / KI /
+  normal value / propagation of unexpected exceptions), Esc at parent
+  returns `_BACK`, Esc at name loops back to parent, Esc at Step 2
+  action menu propagates, Esc at project list re-opens filter menu.
+
+### Changed
+
+- `pick_project` wraps Step 1a + Step 1b in a `while True` loop so
+  Esc from the project list is a no-cost re-entry into the filter
+  stage. The filter stage itself still only has Ctrl+C for cancel
+  (it's the first step — nothing to go back to).
+- `prompt_new_path` routes the parent / name inputs through
+  `_ask_with_back` so Esc propagates as `_BACK` (parent) or loops
+  the inner re-entry (name).
+- `run_interactive_move` treats the Step-3 action menu's `_BACK`
+  return (Esc pressed) the same as choosing the menu's "Back" item.
+- Cross-platform: prompt_toolkit's Esc recognition is consistent
+  across Windows / macOS / Linux; no platform-specific code needed.
+
 ## [0.7.0] — 2026-04-24
 
 ### Added
@@ -456,7 +504,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.1...v0.5.2

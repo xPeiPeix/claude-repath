@@ -28,32 +28,51 @@ class LockEntry:
     reason: str
 
 
-def find_locks_on_path(path: Path) -> list[LockEntry]:
-    """Return processes with a ``cwd`` or open file under ``path``.
+def find_locks_on_paths(paths: list[Path]) -> list[LockEntry]:
+    """Return processes with a ``cwd`` or open file under ANY of ``paths``.
 
-    Each process contributes at most one entry (the first reason found).
-    Caller should display these to the user and either abort or proceed
-    with ``--force`` depending on UX preference.
+    A single process contributes at most one entry — the first hit wins,
+    checked in this order: cwd, then open_files, then path-by-path within
+    each category. Non-existent paths are silently skipped (nothing to lock
+    there), so this is safe to call with an unfiltered list of candidate
+    paths including the source project folder, its Claude state dir, etc.
 
-    Returns an empty list if ``path`` does not exist — there's nothing to
-    lock, so nothing to report.
+    Returns an empty list if no input path exists. This is the underlying
+    implementation; most callers pass one path and should use
+    :func:`find_locks_on_path` for readability.
     """
-    if not path.exists():
-        return []
-    try:
-        target = path.resolve()
-    except OSError:
+    targets: list[Path] = []
+    for p in paths:
+        if not p.exists():
+            continue
+        try:
+            targets.append(p.resolve())
+        except OSError:
+            continue
+    if not targets:
         return []
     entries: list[LockEntry] = []
     for proc in psutil.process_iter(attrs=["pid", "name"]):
-        entry = _inspect_process(proc, target)
+        entry = _inspect_process(proc, targets)
         if entry is not None:
             entries.append(entry)
     return entries
 
 
-def _inspect_process(proc: psutil.Process, target: Path) -> LockEntry | None:
-    """Return a ``LockEntry`` if ``proc`` holds anything under ``target``."""
+def find_locks_on_path(path: Path) -> list[LockEntry]:
+    """Return processes with a ``cwd`` or open file under ``path``.
+
+    Single-path convenience wrapper over :func:`find_locks_on_paths` —
+    kept for callers that only care about one target. Each process
+    contributes at most one entry.
+    """
+    return find_locks_on_paths([path])
+
+
+def _inspect_process(
+    proc: psutil.Process, targets: list[Path]
+) -> LockEntry | None:
+    """Return a ``LockEntry`` if ``proc`` holds anything under any ``target``."""
     try:
         info = proc.info
     except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -71,8 +90,10 @@ def _inspect_process(proc: psutil.Process, target: Path) -> LockEntry | None:
             cwd_resolved = Path(cwd).resolve()
         except OSError:
             cwd_resolved = None
-        if cwd_resolved and _is_subpath(cwd_resolved, target):
-            return LockEntry(pid=pid, name=name, reason=f"cwd={cwd}")
+        if cwd_resolved:
+            for target in targets:
+                if _is_subpath(cwd_resolved, target):
+                    return LockEntry(pid=pid, name=name, reason=f"cwd={cwd}")
 
     # 2) open_files check — IDEs and editors
     try:
@@ -84,8 +105,11 @@ def _inspect_process(proc: psutil.Process, target: Path) -> LockEntry | None:
             of_resolved = Path(of.path).resolve()
         except OSError:
             continue
-        if _is_subpath(of_resolved, target):
-            return LockEntry(pid=pid, name=name, reason=f"open_file={of.path}")
+        for target in targets:
+            if _is_subpath(of_resolved, target):
+                return LockEntry(
+                    pid=pid, name=name, reason=f"open_file={of.path}"
+                )
 
     return None
 

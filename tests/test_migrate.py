@@ -136,59 +136,6 @@ class TestApplyEndToEnd:
         assert report.total_changes > 0
 
 
-class TestDetectClaudeProcesses:
-    """``detect_claude_processes`` must filter out our own ``claude-repath`` PID."""
-
-    def test_unix_excludes_claude_repath_cmdlines(self, monkeypatch):
-        """Lines whose cmdline contains 'claude-repath' must be skipped."""
-        import sys
-
-        from claude_repath import migrate
-
-        fake_stdout = (
-            "12345 /usr/bin/python3 /home/u/.local/bin/claude-repath move\n"
-            "67890 /usr/bin/node /usr/local/bin/claude --session abc\n"
-            "99999 /bin/bash -c 'some claude-repath helper'\n"
-        )
-
-        class _Result:
-            stdout = fake_stdout
-
-        def fake_run(cmd, **_):
-            assert cmd == ["pgrep", "-af", "claude"]
-            return _Result()
-
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(migrate.subprocess, "run", fake_run)
-
-        pids = migrate.detect_claude_processes()
-        assert pids == [67890]
-
-    def test_unix_empty_stdout_returns_empty(self, monkeypatch):
-        import sys
-
-        from claude_repath import migrate
-
-        class _Result:
-            stdout = ""
-
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(migrate.subprocess, "run", lambda *a, **k: _Result())
-        assert migrate.detect_claude_processes() == []
-
-    def test_missing_pgrep_returns_empty(self, monkeypatch):
-        import sys
-
-        from claude_repath import migrate
-
-        def fake_run(*a, **k):
-            raise FileNotFoundError("pgrep not found")
-
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(migrate.subprocess, "run", fake_run)
-        assert migrate.detect_claude_processes() == []
-
-
 class TestMoveProjectFolder:
     """Regression tests for the ``os.rename``-first physical move.
 

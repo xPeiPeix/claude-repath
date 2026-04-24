@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-04-24
+
+### Changed
+
+- **Pre-flight lock check is now project-scoped, not global.** Previously,
+  `move` / `rewire` printed a red `⚠ WARNING` panel listing every
+  running `claude.exe` / `claude` process on the machine, regardless of
+  which project each Claude Code session was operating on. On a
+  multi-project Windows box this surfaced 10+ unrelated PIDs as
+  "possible interference" on every migration — pure noise, and the
+  user was told to close them all before continuing. The check now
+  asks a more precise question: *which processes actually hold
+  resources relevant to **this** migration?* It scans two paths in one
+  psutil pass:
+  1. The source project folder — catches shells that have `cd`-ed in,
+     IDEs / editors with open files (unchanged from v0.4).
+  2. `~/.claude/projects/<encoded-source>/` — the per-project Claude
+     Code state directory. Catches a Claude Code session actively
+     writing `.jsonl` session files for *this* project, which was
+     previously a blind spot: a session writing the source project's
+     state could be stepped on mid-migration, and the old global
+     `claude.exe` scan could not identify the guilty session.
+  Unrelated Claude Code sessions (operating on *other* projects) are
+  now correctly ignored. The lock panel lists every scanned path so
+  the scope is transparent.
+
+### Added
+
+- **`find_locks_on_paths(paths: list[Path])`** public API in
+  `claude_repath.locks` — multi-path aggregation of the single-path
+  `find_locks_on_path`. One pass over `psutil.process_iter`; each
+  process contributes at most one entry regardless of how many target
+  paths hit; non-existent paths are silently skipped so callers can
+  pass candidate lists without pre-filtering. `find_locks_on_path` is
+  retained as a single-path convenience wrapper.
+- 6 new pytest cases in `test_locks.py` (181 total, up from 178):
+  empty-input short-circuit, all-paths-nonexistent short-circuit,
+  mixed-existence tolerance (missing path skipped, real path still
+  checked), cross-path hit aggregation, single-process dedup across
+  multiple target paths, `find_locks_on_path` single-path wrapper
+  delegation invariant.
+
+### Removed
+
+- **`detect_claude_processes()`** public function in
+  `claude_repath.migrate` — the former global `tasklist` / `pgrep -af`
+  scan that powered the noisy `⚠ WARNING` panel. Callers needing
+  project-scoped process detection should use `find_locks_on_paths`
+  instead, which reports *why* each process is a risk (cwd /
+  open_file) rather than a bare PID list. `TestDetectClaudeProcesses`
+  (3 cases) removed from `test_migrate.py`.
+- **`_warn_running_claude()`** soft-warning helper in `cli.py` — the
+  red `⚠ WARNING` panel itself. The targeted hard-check (pre-flight
+  lock report) now covers every case the soft warning was meant to
+  flag, with better signal and no false positives from unrelated
+  Claude Code windows.
+
 ## [0.5.2] — 2026-04-22
 
 ### Fixed
@@ -347,7 +404,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.4.2...v0.5.0

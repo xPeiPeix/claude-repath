@@ -17,6 +17,7 @@ from claude_repath.locks import (
     LockEntry,
     _is_subpath,
     find_locks_on_path,
+    find_locks_on_paths,
     format_lock_report,
 )
 
@@ -178,6 +179,85 @@ class TestFindLocksOnPath:
         assert len(result) == 1
         # cwd is checked before open_files, so cwd wins as the reported reason.
         assert result[0].reason.startswith("cwd=")
+
+
+class TestFindLocksOnPaths:
+    """Multi-path aggregation — any path hit counts, non-existent paths skipped."""
+
+    def test_empty_paths_returns_empty(self, patch_process_iter):
+        patch_process_iter([_FakeProc(pid=1, cwd="/tmp")])
+        assert find_locks_on_paths([]) == []
+
+    def test_all_paths_nonexistent_returns_empty(self, tmp_path, patch_process_iter):
+        patch_process_iter([_FakeProc(pid=1, cwd=str(tmp_path))])
+        nope1 = tmp_path / "nope1"
+        nope2 = tmp_path / "nope2"
+        assert find_locks_on_paths([nope1, nope2]) == []
+
+    def test_nonexistent_paths_are_skipped_but_others_still_checked(
+        self, tmp_path, patch_process_iter
+    ):
+        """A mix of real and missing paths: the real one still triggers a hit."""
+        real = tmp_path / "real"
+        real.mkdir()
+        missing = tmp_path / "missing"
+        patch_process_iter([_FakeProc(pid=77, name="bash", cwd=str(real))])
+        result = find_locks_on_paths([missing, real])
+        assert len(result) == 1
+        assert result[0].pid == 77
+
+    def test_hits_across_different_paths_in_same_call(
+        self, tmp_path, patch_process_iter
+    ):
+        """Two processes, each locking a different path — both reported."""
+        path_a = tmp_path / "project"
+        path_a.mkdir()
+        path_b = tmp_path / "state"
+        path_b.mkdir()
+        patch_process_iter(
+            [
+                _FakeProc(pid=1, name="bash", cwd=str(path_a)),
+                _FakeProc(pid=2, name="claude.exe", cwd=str(path_b)),
+            ]
+        )
+        result = find_locks_on_paths([path_a, path_b])
+        pids = {e.pid for e in result}
+        assert pids == {1, 2}
+
+    def test_same_process_hitting_multiple_paths_reports_once(
+        self, tmp_path, patch_process_iter
+    ):
+        """A process whose cwd is under path_a and also has an open file under
+        path_b contributes exactly one entry (the cwd-hit wins, as before)."""
+        path_a = tmp_path / "a"
+        path_a.mkdir()
+        path_b = tmp_path / "b"
+        path_b.mkdir()
+        open_in_b = path_b / "state.jsonl"
+        open_in_b.write_text("")
+        patch_process_iter(
+            [
+                _FakeProc(
+                    pid=42,
+                    name="ide",
+                    cwd=str(path_a),
+                    open_files=[_FakeOpenFile(path=str(open_in_b))],
+                )
+            ]
+        )
+        result = find_locks_on_paths([path_a, path_b])
+        assert len(result) == 1
+        assert result[0].reason.startswith("cwd=")
+
+    def test_single_path_wrapper_delegates(self, tmp_path, patch_process_iter):
+        """``find_locks_on_path`` is a thin wrapper — behavior must match
+        ``find_locks_on_paths([path])``."""
+        target = tmp_path / "proj"
+        target.mkdir()
+        patch_process_iter([_FakeProc(pid=9, cwd=str(target))])
+        via_single = find_locks_on_path(target)
+        via_multi = find_locks_on_paths([target])
+        assert [e.pid for e in via_single] == [e.pid for e in via_multi] == [9]
 
 
 class TestFormatLockReport:

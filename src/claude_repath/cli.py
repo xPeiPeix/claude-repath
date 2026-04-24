@@ -18,7 +18,6 @@ from .migrate import (
     PhysicalMoveError,
     PlanReport,
     apply_migration,
-    detect_claude_processes,
     move_project_folder,
     plan_migration,
 )
@@ -73,38 +72,45 @@ def _print_apply(report: ApplyReport) -> None:
     )
 
 
-def _warn_running_claude() -> None:
-    pids = detect_claude_processes()
-    if pids:
-        console.print(
-            Panel(
-                f"Detected running claude process(es): {pids}\n"
-                "State files may be locked or overwritten mid-migration.\n"
-                "[bold]Close all Claude Code sessions before continuing.[/bold]",
-                title="[red]⚠ WARNING[/red]",
-                border_style="red",
-            )
-        )
+def _check_preflight_locks(
+    ctx: MigrationContext, path: str, *, force: bool, dry_run: bool
+) -> None:
+    """Hard-refuse migration if any process holds resources relevant to this run.
 
+    Scans two scopes (both filtered for existence before checking):
 
-def _check_preflight_locks(path: str, *, force: bool, dry_run: bool) -> None:
-    """Hard-refuse migration if another process holds resources under ``path``.
+    1. The source project directory (``path``) — catches shells that have
+       ``cd``-ed into the project, IDEs/editors with files open, etc.
+    2. ``~/.claude/projects/<encoded-source>/`` — catches a running Claude
+       Code session actively writing ``.jsonl`` session files for *this*
+       project. Other Claude Code sessions (operating on unrelated projects)
+       are deliberately ignored — they are not a migration risk.
 
-    Unlike the soft ``_warn_running_claude`` check, locks from shells,
-    editors, or IDEs cause mid-migration ``shutil.move`` failures on Windows.
-    This check exits with code 1 unless ``--force`` is passed or the user is
-    in dry-run mode (in which case the report is informational only).
+    This targeted scan replaces an earlier global "any ``claude.exe`` running"
+    warning, which fired on every Claude Code window regardless of project
+    and generated useless noise on multi-project machines.
+
+    Exits with code 1 unless ``--force`` is passed or the user is in dry-run
+    mode (in which case the report is informational only).
     """
-    from .locks import find_locks_on_path, format_lock_report
+    from .locks import find_locks_on_paths, format_lock_report
 
-    locks = find_locks_on_path(Path(path))
+    source_dir = Path(path)
+    state_dir = ctx.projects_dir / encode_path(path)
+    scanned = [p for p in (source_dir, state_dir) if p.exists()]
+    if not scanned:
+        return
+
+    locks = find_locks_on_paths(scanned)
     if not locks:
         return
     prefix = "[yellow]dry-run preview: [/yellow]" if dry_run else ""
+    scanned_lines = "\n".join(f"  [cyan]{p}[/cyan]" for p in scanned)
     console.print(
         Panel(
-            f"{prefix}The following processes hold resources under:\n"
-            f"  [cyan]{path}[/cyan]\n\n"
+            f"{prefix}Processes hold resources under the source project "
+            "or its Claude Code state directory:\n"
+            f"{scanned_lines}\n\n"
             + format_lock_report(locks)
             + "\n\n[yellow]Close these processes, or pass "
             "[cyan]--force[/cyan] to proceed anyway.[/yellow]",
@@ -216,7 +222,7 @@ def move_cmd(
                 f"[cyan]physical:[/cyan] mv {old_path} -> {new_path}"
             )
 
-        _check_preflight_locks(scan_path, force=force, dry_run=dry_run)
+        _check_preflight_locks(ctx, scan_path, force=force, dry_run=dry_run)
         if not no_move:
             _check_env_sensitive_subdirs(scan_path)
 
@@ -224,13 +230,10 @@ def move_cmd(
             console.print("[dim]dry-run: no changes made[/dim]")
             raise typer.Exit()
 
-        _warn_running_claude()
-
         if not yes and not typer.confirm("Proceed with migration?"):
             raise typer.Abort()
     else:
-        _warn_running_claude()
-        _check_preflight_locks(scan_path, force=force, dry_run=False)
+        _check_preflight_locks(ctx, scan_path, force=force, dry_run=False)
         if not no_move:
             _check_env_sensitive_subdirs(scan_path)
 

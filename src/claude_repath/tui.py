@@ -102,6 +102,15 @@ def _attach_esc_back(question):
         return question  # test stub without a real prompt_toolkit Application
     existing = app.key_bindings
     app.key_bindings = merge_key_bindings([existing, _esc_back_kb()])
+    # Collapse prompt_toolkit's escape-timeout so a single Esc press fires
+    # immediately instead of waiting ~500 ms for a possible Alt-<key>
+    # combo. ``eager=True`` on the binding alone isn't enough — Esc is a
+    # prefix key and the global timeoutlen still gates it. Cost: we can't
+    # synthesize Alt-<key> combos, which this TUI doesn't use.
+    try:
+        app.timeoutlen = 0.0
+    except AttributeError:
+        pass  # older prompt_toolkit without the attribute — still usable
     return question
 
 
@@ -245,11 +254,19 @@ def _pick_status_filter(
     default_choice = next(
         (c for c in choices if c.value == default_value), choices[0]
     )
-    return questionary.select(
+    question = questionary.select(
         "Filter by status:",
         choices=choices,
         default=default_choice,
-    ).ask()
+    )
+    result = _ask_with_back(question)
+    # Step 1a has no previous step, so Esc / empty-submit / Ctrl+C all
+    # collapse to "cancel". Also guards against an odd empty-string return
+    # some questionary versions emit on Esc, which would otherwise crash
+    # with KeyError when used as a bucket key downstream.
+    if result == _BACK or not result:
+        return None
+    return result
 
 
 def _ask_action(prompt: str, choices: list[tuple[str, str]]) -> str | None:
@@ -511,21 +528,25 @@ def prompt_new_path(old_path: str) -> str | None:
     current_parent = str(old.parent)
     current_name = old.name
 
-    while True:
-        _step_banner(
-            2,
-            "Choose the new location",
-            subtitle=f"Moving from:  {old_path}",
-        )
-        _help_bar(
-            [
-                ("Tab", "complete"),
-                ("Enter", "next"),
-                ("Esc", "back"),
-                ("Ctrl+C", "cancel"),
-            ]
-        )
+    # Render the banner + help bar once on entry, not on every Edit loop.
+    # The previous placement caused stacked Step-2 banners when the user
+    # cycled through the action menu's Edit option, visually noisy and
+    # confusing.
+    _step_banner(
+        2,
+        "Choose the new location",
+        subtitle=f"Moving from:  {old_path}",
+    )
+    _help_bar(
+        [
+            ("Tab", "complete"),
+            ("Enter", "next"),
+            ("Esc", "back"),
+            ("Ctrl+C", "cancel"),
+        ]
+    )
 
+    while True:
         parent_input = _ask_with_back(
             questionary.path(
                 "New parent directory:",

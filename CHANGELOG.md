@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-04-24
+
+### Fixed
+
+- **Esc response latency on single press.** v0.8.0 relied on `eager=True`
+  in the prompt_toolkit KeyBinding to fire Esc immediately, but Esc is a
+  *prefix key* (can introduce Alt-<key> combos) and the global
+  `Application.timeoutlen` (default 500 ms) still gated the single-press
+  handler behind a half-second wait. `_attach_esc_back` now collapses
+  `timeoutlen` to `0.0` so Esc fires on keydown. Users saw a ~2 s delay
+  before the Back-to-Step-1a transition; it's now instant.
+- **``KeyError: ''`` at Step 1a when the filter prompt returned an empty
+  string.** Some questionary + prompt_toolkit versions emit `''` (instead
+  of raising) when the user hits Esc at a `select` prompt without the
+  Esc handler wired. `_pick_status_filter` now routes through
+  `_ask_with_back` so Esc consistently maps to :data:`_BACK`, and treats
+  an empty-string return as cancel. Guards the downstream
+  `buckets[filter_key]` lookup from crashing on a bogus key.
+- **Step-2 banner stacking when the user cycled through "Edit".** The
+  ``_step_banner`` + ``_help_bar`` calls were inside the Step-2 ``while``
+  loop, so every Edit round re-printed the banner, stacking them vertically
+  and confusing first-time users about which Step-2 prompt was "live".
+  Moved both calls to run once on function entry; prompts, preview, and
+  action menu still re-render per loop iteration as before.
+
+### Changed
+
+- `_pick_status_filter` return type semantics: previously returned
+  ``None`` only on Ctrl+C; now also returns ``None`` on Esc and on any
+  falsy value (e.g. ``""``). Equivalent behavior for callers that
+  already guarded with ``if filter_key is None``.
+
 ## [0.8.0] — 2026-04-24
 
 ### Added
@@ -504,7 +536,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.2...v0.6.0

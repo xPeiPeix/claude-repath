@@ -47,6 +47,22 @@ _ICON_ORPHAN = "🔴"
 _ICON_EMPTY = "⚪"
 _ICON_UNKNOWN = "❓"
 
+# Navigation sentinel returned by step functions to request "go back one
+# step" — distinct from ``None``, which still means "cancel the whole flow".
+_BACK = "__back__"
+
+# Status keys (in display order for the Step-1a filter menu), paired with
+# the rank numbers emitted by ``_status_rank``. Centralized so the filter
+# menu / bucket dict / icon lookup share one source of truth.
+_STATUS_KEYS = ("active", "orphan", "empty", "unknown")
+_STATUS_RANK_MAP = {0: "active", 1: "orphan", 2: "empty", 3: "unknown"}
+_STATUS_ICON_MAP = {
+    "active": _ICON_ACTIVE,
+    "orphan": _ICON_ORPHAN,
+    "empty": _ICON_EMPTY,
+    "unknown": _ICON_UNKNOWN,
+}
+
 
 def discover_projects(projects_dir: Path) -> list[tuple[Path, str, int, bool]]:
     """Return ``[(folder, resolved_cwd, session_count, cwd_exists), ...]``.
@@ -109,6 +125,72 @@ def _status_rank(cwd: str, sessions: int, cwd_exists: bool) -> int:
     if sessions == 0:
         return 2  # empty
     return 0  # active
+
+
+def _group_by_status(
+    entries: list[tuple[Path, str, int, bool]],
+) -> dict[str, list[tuple[Path, str, int, bool]]]:
+    """Bucket ``discover_projects`` output by visible status.
+
+    All four keys are always present (empty list when a bucket has no
+    entries) so callers don't need to handle ``KeyError``.
+    """
+    buckets: dict[str, list[tuple[Path, str, int, bool]]] = {
+        k: [] for k in _STATUS_KEYS
+    }
+    for entry in entries:
+        _folder, cwd, sessions, cwd_exists = entry
+        rank = _status_rank(cwd, sessions, cwd_exists)
+        buckets[_STATUS_RANK_MAP[rank]].append(entry)
+    return buckets
+
+
+def _pick_status_filter(
+    buckets: dict[str, list[tuple[Path, str, int, bool]]],
+) -> str | None:
+    """Step 1a: ask which status bucket to show (or ``all``) before listing.
+
+    Returns the chosen key (``"all"`` / ``"active"`` / ``"orphan"`` /
+    ``"empty"`` / ``"unknown"``), or ``None`` when the user cancels.
+
+    The initial cursor lands on ``"active"`` when that bucket is non-empty
+    — the common "find the project I work in daily" case. Empty buckets
+    are hidden from the menu so users never see "empty (0)".
+    """
+    total = sum(len(v) for v in buckets.values())
+    choices: list[questionary.Choice] = [
+        questionary.Choice(title=f"📋  all  ({total})", value="all"),
+    ]
+    for key in _STATUS_KEYS:
+        count = len(buckets[key])
+        if count == 0:
+            continue
+        choices.append(
+            questionary.Choice(
+                title=f"{_STATUS_ICON_MAP[key]}  {key}  ({count})", value=key
+            )
+        )
+
+    default_value = "active" if buckets["active"] else "all"
+    default_choice = next(
+        (c for c in choices if c.value == default_value), choices[0]
+    )
+    return questionary.select(
+        "Filter by status:",
+        choices=choices,
+        default=default_choice,
+    ).ask()
+
+
+def _ask_action(prompt: str, choices: list[tuple[str, str]]) -> str | None:
+    """Present a simple ``(label, value)`` action menu and return the value.
+
+    Wraps ``questionary.select`` so the Step-2 / Step-3 action menus share a
+    single call site and tests can stub one Python function instead of
+    mocking questionary internals.
+    """
+    qs_choices = [questionary.Choice(title=t, value=v) for t, v in choices]
+    return questionary.select(prompt, choices=qs_choices).ask()
 
 
 def _extract_cwd_from_sessions(project_dir: Path) -> str | None:
@@ -276,18 +358,41 @@ def _choice_title(cwd: str, sessions: int, cwd_exists: bool) -> list[tuple[str, 
 
 
 def pick_project(projects_dir: Path) -> str | None:
-    """Step 1/3: show project list, return chosen project's cwd or ``None``."""
+    """Step 1/3: two-stage pick — select a status bucket, then a project.
+
+    Step 1a shows a compact menu counting each status bucket
+    (active / orphan / empty / unknown / all). The cursor defaults to
+    ``active`` when non-empty, the common daily-use case. Step 1b then
+    lists only projects from the chosen bucket, so users with hundreds of
+    projects don't have to page through everything to find one type.
+
+    Returns the selected project's cwd, or ``None`` on cancel at either
+    sub-step.
+    """
     _step_banner(1, "Pick a project to migrate")
     entries = discover_projects(projects_dir)
     if not entries:
         _notify(f"No projects found under {projects_dir}")
         return None
-    choices = [
-        questionary.Choice(title=_choice_title(cwd, n, exists), value=cwd)
-        for _folder, cwd, n, exists in entries
-    ]
+
+    buckets = _group_by_status(entries)
     _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
     _legend_bar()
+
+    filter_key = _pick_status_filter(buckets)
+    if filter_key is None:
+        return None
+
+    filtered = entries if filter_key == "all" else buckets[filter_key]
+    if not filtered:
+        _notify(f"No '{filter_key}' projects to pick.")
+        return None
+
+    choices = [
+        questionary.Choice(title=_choice_title(cwd, n, exists), value=cwd)
+        for _folder, cwd, n, exists in filtered
+    ]
+    _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
     return questionary.select(
         "Which project do you want to relocate?",
         choices=choices,
@@ -295,57 +400,108 @@ def pick_project(projects_dir: Path) -> str | None:
 
 
 def prompt_new_path(old_path: str) -> str | None:
-    """Step 2/3: two-stage input — parent directory + project name.
+    """Step 2/3: two-stage input + live path preview + action menu.
 
-    Returns a normalized absolute path as a string, or ``None`` if cancelled.
-    Path normalization (separators, ~ expansion) is done via ``pathlib.Path``;
-    the resulting string uses the host OS's native separator.
+    Returns one of three things:
+        * Normalized absolute path string → proceed to Step 3
+        * ``None`` → user cancelled the whole flow
+        * :data:`_BACK` → user asked to go back to Step 1 (re-pick project)
+
+    After entering parent+name the user sees a Source→Target preview panel
+    and an action menu (Continue / Edit / Back / Cancel). ``Edit`` loops
+    back to re-enter fields with last inputs retained as defaults, so a
+    typo in one field doesn't force re-typing the other.
     """
-    _step_banner(
-        2,
-        "Choose the new location",
-        subtitle=f"Moving from:  {old_path}",
-    )
-    _help_bar([("Tab", "complete"), ("Enter", "next"), ("Ctrl+C", "cancel")])
-
     old = Path(old_path)
-    default_parent = str(old.parent)
-    default_name = old.name
+    current_parent = str(old.parent)
+    current_name = old.name
 
-    parent_input = questionary.path(
-        "New parent directory:",
-        default=default_parent,
-        only_directories=True,
-    ).ask()
-    if parent_input is None or not parent_input.strip():
-        return None
+    while True:
+        _step_banner(
+            2,
+            "Choose the new location",
+            subtitle=f"Moving from:  {old_path}",
+        )
+        _help_bar([("Tab", "complete"), ("Enter", "next"), ("Ctrl+C", "cancel")])
 
-    parent = Path(parent_input).expanduser()
-
-    name_input = questionary.text(
-        "New project name:",
-        default=default_name,
-    ).ask()
-    if name_input is None or not name_input.strip():
-        return None
-    name = name_input.strip()
-
-    new_path_abs = parent / name
-
-    if not parent.exists():
-        create = questionary.confirm(
-            f"Parent directory does not exist:\n  {parent}\nCreate it on apply?",
-            default=True,
+        parent_input = questionary.path(
+            "New parent directory:",
+            default=current_parent,
+            only_directories=True,
         ).ask()
-        if not create:
+        if parent_input is None or not parent_input.strip():
             return None
+        current_parent = parent_input.strip()
 
-    return str(new_path_abs)
+        name_input = questionary.text(
+            "New project name:",
+            default=current_name,
+        ).ask()
+        if name_input is None or not name_input.strip():
+            return None
+        current_name = name_input.strip()
+
+        parent = Path(current_parent).expanduser()
+        new_path_abs = parent / current_name
+
+        _print_path_preview(old_path, str(new_path_abs))
+
+        action = _ask_action(
+            "Confirm the new location?",
+            [
+                ("✅  Continue — preview plan (Step 3)", "confirm"),
+                ("✏️  Edit — re-enter parent / name", "edit"),
+                ("⬅️  Back to project selection (Step 1)", "back"),
+                ("❌  Cancel", "cancel"),
+            ],
+        )
+
+        if action is None or action == "cancel":
+            return None
+        if action == "back":
+            return _BACK
+        if action == "edit":
+            continue
+        # action == "confirm"
+        if not parent.exists():
+            create = questionary.confirm(
+                f"Parent directory does not exist:\n  {parent}\n"
+                "Create it on apply?",
+                default=True,
+            ).ask()
+            if not create:
+                # Declining creation is an implicit cancel — the user can
+                # still Edit via the action menu to pick a different parent
+                # without leaving the flow. Treating this as continue would
+                # infinite-loop with a fixed-stub test and muddle the UX.
+                return None
+        return str(new_path_abs)
 
 
 def confirm(message: str, default: bool = False) -> bool:
     answer = questionary.confirm(message, default=default).ask()
     return bool(answer)
+
+
+def _print_path_preview(old: str, new: str) -> None:
+    """Render a compact Source→Target panel during Step 2.
+
+    Mirrors the layout of :func:`_print_preview` but without per-layer
+    plan counts — the Step-2 user just needs to confirm the path math
+    (parent + name) before we actually build a plan in Step 3.
+    """
+    body = (
+        f"[dim]Source:[/dim]  [cyan]{old}[/cyan]\n"
+        f"[dim]Target:[/dim]  [bold cyan]{new}[/bold cyan]"
+    )
+    _console.print(
+        Panel(
+            body,
+            title="[bold]Path preview[/bold]",
+            border_style="dim",
+            expand=False,
+        )
+    )
 
 
 def _print_preview(old: str, new: str, plan: PlanReport) -> None:
@@ -380,35 +536,63 @@ def run_interactive_move(
     projects_dir: Path,
     scope: str = "narrow",
 ) -> tuple[str, str] | None:
-    """Full interactive flow: pick project → choose location → preview → confirm.
+    """Full interactive flow with bidirectional navigation between steps.
 
-    Returns ``(old_path, new_path)`` when the user confirms, or ``None`` if
-    they cancel anywhere. The preview in Step 3 calls ``plan_migration``
-    internally, so ``cli.py`` should skip re-printing the plan for TUI
-    sessions.
+    Forward: Step 1 (pick) → Step 2 (new location) → Step 3 (plan & confirm).
+    Backward: Step 2 action menu can jump to Step 1; Step 3 action menu can
+    jump to Step 2. On jumping back, the *earlier* step's selection is
+    discarded (so we re-prompt fresh) but the *later* step keeps its state
+    until the user reaches it again.
+
+    Returns ``(old_path, new_path)`` on final confirm, or ``None`` when the
+    user cancels anywhere.
     """
     _show_banner()
-    old = pick_project(projects_dir)
-    if not old:
-        return None
 
-    new = prompt_new_path(old)
-    if not new:
-        return None
-    if new == old:
-        _notify("New path is identical to old — nothing to migrate.")
-        return None
+    old: str | None = None
+    new: str | None = None
 
-    _step_banner(3, "Review & confirm")
-    ctx = MigrationContext(old_path=old, new_path=new, scope=scope)
-    try:
-        plan = plan_migration(ctx)
-    except Exception as exc:
-        _notify(f"Planning failed: {exc}")
-        return None
-    _print_preview(old, new, plan)
-    _help_bar([("Y", "proceed"), ("N", "cancel")])
+    while True:
+        if old is None:
+            old = pick_project(projects_dir)
+            if old is None:
+                return None
 
-    if not confirm("Proceed with migration?", default=True):
-        return None
-    return old, new
+        if new is None:
+            result = prompt_new_path(old)
+            if result is None:
+                return None
+            if result == _BACK:
+                old = None
+                continue
+            if result == old:
+                _notify("New path is identical to old — nothing to migrate.")
+                return None
+            new = result
+
+        _step_banner(3, "Review & confirm")
+        ctx = MigrationContext(old_path=old, new_path=new, scope=scope)
+        try:
+            plan = plan_migration(ctx)
+        except Exception as exc:
+            _notify(f"Planning failed: {exc}")
+            return None
+        _print_preview(old, new, plan)
+        _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
+
+        action = _ask_action(
+            "Proceed with migration?",
+            [
+                ("✅  Yes, proceed", "proceed"),
+                ("⬅️  Back — re-enter the new location (Step 2)", "back"),
+                ("❌  No, cancel", "cancel"),
+            ],
+        )
+
+        if action is None or action == "cancel":
+            return None
+        if action == "back":
+            new = None
+            continue
+        # action == "proceed"
+        return old, new

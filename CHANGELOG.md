@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-04-24
+
+### Added
+
+- **Step 1 status filter.** The interactive `move` picker now opens with a
+  compact menu that buckets projects by status — 🟢 active / 🔴 orphan /
+  ⚪ empty / ❓ unknown / 📋 all — each with a count. On machines with
+  many projects (the common case once you've used Claude Code for a
+  while), you can narrow the list to a single status before scrolling.
+  The cursor defaults to `active`, the daily-use case. Empty buckets are
+  hidden from the menu so users never see "empty (0)". New public helper
+  `_group_by_status` centralizes the bucketing logic for test reuse.
+- **Step 2 path preview + action menu.** After entering parent + name,
+  the wizard shows a Source→Target panel so you can see exactly where
+  the project will land before committing. A follow-up action menu
+  offers four paths:
+  - ✅ Continue — proceed to Step 3 (plan preview)
+  - ✏️  Edit — re-enter parent / name (defaults preserve last inputs, so
+    a typo in one field doesn't force re-typing the other)
+  - ⬅️  Back — return to Step 1 to re-pick the project
+  - ❌ Cancel — abort the whole flow
+- **Step 3 back-to-Step-2 option.** The final "Proceed with migration?"
+  prompt is now a three-way menu (proceed / back / cancel), so if the
+  plan preview reveals an unexpected change count you can hop back to
+  Step 2 and edit the target location without Ctrl+C-ing out and
+  restarting from scratch.
+- Sentinel constant `_BACK` (returned by step functions to signal the
+  orchestrator to re-enter the previous step) and helper `_ask_action`
+  (wraps `questionary.select` for the Step-2/Step-3 action menus).
+- 11 new pytest cases in `test_tui.py` (192 total, up from 181):
+  status-bucket classification (empty / four-status / missing keys),
+  filter stage dispatch (all / one-bucket / cancel / empty-dir skip),
+  Step-2 action menu branches (back / cancel / edit-then-confirm loop),
+  Step-3 back navigation (re-prompts new path while keeping project),
+  Step-2 back navigation (re-runs picker, retains flow state).
+
+### Changed
+
+- `pick_project` is now a two-stage flow (filter → project) instead of a
+  single flat list. Pre-v0.7 callers that passed no arguments besides
+  `projects_dir` are unaffected — the signature is unchanged, only the
+  interactive behavior is richer.
+- `prompt_new_path` return type widened to include `_BACK` alongside
+  `str | None`. Type annotation is still `str | None` at the signature
+  level (the sentinel is a string) but callers now check for the
+  `_BACK` value before using the result as a path.
+- `run_interactive_move` wraps the three steps in an outer `while`
+  loop. Forward transitions advance by setting `old` / `new`; back
+  transitions clear the later variable and re-enter the earlier step.
+  Step 1 has no back option (it's the first step); Step 2 and Step 3
+  each have one.
+
 ## [0.6.0] — 2026-04-24
 
 ### Changed
@@ -404,7 +456,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.5.0...v0.5.1

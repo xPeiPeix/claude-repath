@@ -11,6 +11,7 @@ from pathlib import Path
 
 from claude_repath import tui
 from claude_repath.tui import (
+    _BACK,
     _BANNER_GRADIENT_END,
     _BANNER_GRADIENT_START,
     _ICON_ACTIVE,
@@ -21,6 +22,7 @@ from claude_repath.tui import (
     _extract_cwd_from_sessions,
     _find_cwd,
     _gradient_hex,
+    _group_by_status,
     discover_projects,
 )
 
@@ -456,8 +458,8 @@ class TestRunInteractiveMove:
     def test_identity_path_rejected(self, monkeypatch, tmp_path: Path):
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\same")
         monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\same")
-        # confirm shouldn't even be reached, but stub anyway.
-        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        # Identity check fires before the Step-3 action menu, so no
+        # _ask_action stub is needed — if we reach it the test will hang.
         assert tui.run_interactive_move(tmp_path) is None
 
     def test_cancel_at_confirm_returns_none(self, monkeypatch, tmp_path: Path):
@@ -466,7 +468,7 @@ class TestRunInteractiveMove:
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
         monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
         monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
-        monkeypatch.setattr(tui, "confirm", lambda *a, **k: False)
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "cancel")
         assert tui.run_interactive_move(tmp_path) is None
 
     def test_happy_path_returns_tuple(self, monkeypatch, tmp_path: Path):
@@ -475,7 +477,7 @@ class TestRunInteractiveMove:
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
         monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
         monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
-        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "proceed")
         result = tui.run_interactive_move(tmp_path)
         assert result == (r"D:\old", r"D:\new")
 
@@ -492,7 +494,7 @@ class TestRunInteractiveMove:
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
         monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
         monkeypatch.setattr(tui, "plan_migration", fake_plan)
-        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "proceed")
         tui.run_interactive_move(tmp_path, scope="broad")
         assert captured["scope"] == "broad"
 
@@ -505,8 +507,68 @@ class TestRunInteractiveMove:
         monkeypatch.setattr(tui, "pick_project", lambda _: r"D:\old")
         monkeypatch.setattr(tui, "prompt_new_path", lambda _old: r"D:\new")
         monkeypatch.setattr(tui, "plan_migration", boom)
-        monkeypatch.setattr(tui, "confirm", lambda *a, **k: True)
+        # Failure aborts before reaching the action menu.
         assert tui.run_interactive_move(tmp_path) is None
+
+    def test_step3_back_re_prompts_new_path_only(self, monkeypatch, tmp_path: Path):
+        """Step 3 "Back" re-runs prompt_new_path but keeps the picked project.
+
+        Pinned invariant: prompt_new_path called twice, pick_project called
+        once — exactly what the "go back to Step 2" UX promises.
+        """
+        from claude_repath.migrate import PlanReport
+
+        pick_calls: list[int] = []
+
+        def fake_pick(_projects_dir):
+            pick_calls.append(1)
+            return r"D:\old"
+
+        prompt_calls: list[int] = []
+        new_paths = iter([r"D:\new_attempt_1", r"D:\new_attempt_2"])
+
+        def fake_prompt(_old):
+            prompt_calls.append(1)
+            return next(new_paths)
+
+        actions = iter(["back", "proceed"])
+        monkeypatch.setattr(tui, "pick_project", fake_pick)
+        monkeypatch.setattr(tui, "prompt_new_path", fake_prompt)
+        monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: next(actions))
+
+        result = tui.run_interactive_move(tmp_path)
+        assert len(pick_calls) == 1
+        assert len(prompt_calls) == 2
+        assert result == (r"D:\old", r"D:\new_attempt_2")
+
+    def test_step2_back_re_prompts_pick_project(self, monkeypatch, tmp_path: Path):
+        """``prompt_new_path`` returning :data:`_BACK` re-opens the picker."""
+        from claude_repath.migrate import PlanReport
+
+        pick_calls: list[int] = []
+        olds = iter([r"D:\old_attempt_1", r"D:\old_attempt_2"])
+
+        def fake_pick(_projects_dir):
+            pick_calls.append(1)
+            return next(olds)
+
+        prompt_calls: list[int] = []
+        news = iter([_BACK, r"D:\new"])
+
+        def fake_prompt(_old):
+            prompt_calls.append(1)
+            return next(news)
+
+        monkeypatch.setattr(tui, "pick_project", fake_pick)
+        monkeypatch.setattr(tui, "prompt_new_path", fake_prompt)
+        monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "proceed")
+
+        result = tui.run_interactive_move(tmp_path)
+        assert len(pick_calls) == 2
+        assert len(prompt_calls) == 2
+        assert result == (r"D:\old_attempt_2", r"D:\new")
 
 
 class TestPromptNewPath:
@@ -518,8 +580,15 @@ class TestPromptNewPath:
         parent: str | None,
         name: str | None,
         create_parent: bool | None = True,
+        action: str = "confirm",
     ) -> None:
-        """Replace questionary calls with deterministic answers."""
+        """Replace questionary calls with deterministic answers.
+
+        ``action`` controls the Step-2 action menu verdict. Default
+        ``"confirm"`` preserves pre-v0.7 test semantics: after entering
+        parent + name, the user confirms. Pass ``"back"`` / ``"cancel"``
+        / ``"edit"`` to exercise the other branches.
+        """
 
         class _StubPath:
             def __init__(self, val):
@@ -539,6 +608,7 @@ class TestPromptNewPath:
         monkeypatch.setattr(q, "path", lambda *a, **k: _StubPath(parent))
         monkeypatch.setattr(q, "text", lambda *a, **k: _StubText(name))
         monkeypatch.setattr(q, "confirm", lambda *a, **k: _StubConfirm(create_parent))
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: action)
 
     def test_parent_and_name_joined(self, monkeypatch, tmp_path: Path):
         # existing parent → no creation confirm needed
@@ -571,6 +641,7 @@ class TestPromptNewPath:
 
         monkeypatch.setattr(q, "path", lambda *a, **k: _P())
         monkeypatch.setattr(q, "text", fake_text)
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "confirm")
         # Use a cross-platform path literal — a hard-coded "D:\..." string
         # parses differently on POSIX (whole string treated as the name)
         # vs Windows (drive letter → real parent/name split).
@@ -623,6 +694,7 @@ class TestPromptNewPath:
         monkeypatch.setattr(q, "path", lambda *a, **k: _P())
         monkeypatch.setattr(q, "text", lambda *a, **k: _T())
         monkeypatch.setattr(q, "confirm", lambda *a, **k: _C())
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "confirm")
 
         out = tui.prompt_new_path(r"D:\projects\original")
         assert out is not None
@@ -630,3 +702,166 @@ class TestPromptNewPath:
         home = str(Path.home())
         assert out.startswith(home)
         assert out.endswith("foo")
+
+    def test_back_action_returns_back_sentinel(self, monkeypatch, tmp_path: Path):
+        """The action menu's ``Back`` choice signals the outer flow to re-pick."""
+        existing = tmp_path / "dest"
+        existing.mkdir()
+        self._stub(monkeypatch, parent=str(existing), name="proj", action="back")
+        assert tui.prompt_new_path(str(tmp_path / "old")) == _BACK
+
+    def test_cancel_action_returns_none(self, monkeypatch, tmp_path: Path):
+        """Choosing Cancel at the action menu aborts the whole flow."""
+        existing = tmp_path / "dest"
+        existing.mkdir()
+        self._stub(monkeypatch, parent=str(existing), name="proj", action="cancel")
+        assert tui.prompt_new_path(str(tmp_path / "old")) is None
+
+    def test_edit_action_loops_and_can_confirm(self, monkeypatch, tmp_path: Path):
+        """``Edit`` loops back to re-prompt; a subsequent ``confirm`` must work."""
+        existing = tmp_path / "dest"
+        existing.mkdir()
+
+        # Cycle: edit → confirm (two iterations of the inner while loop).
+        actions = iter(["edit", "confirm"])
+
+        class _StubVal:
+            def __init__(self, val):
+                self._val = val
+
+            def ask(self):
+                return self._val
+
+        import questionary as q
+
+        monkeypatch.setattr(q, "path", lambda *a, **k: _StubVal(str(existing)))
+        monkeypatch.setattr(q, "text", lambda *a, **k: _StubVal("proj"))
+        monkeypatch.setattr(q, "confirm", lambda *a, **k: _StubVal(True))
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: next(actions))
+
+        out = tui.prompt_new_path(str(tmp_path / "old"))
+        assert out == str(existing / "proj")
+
+
+class TestGroupByStatus:
+    """Bucketing helper that feeds the Step-1a filter menu."""
+
+    def test_empty_input_keeps_all_keys(self):
+        buckets = _group_by_status([])
+        assert set(buckets.keys()) == {"active", "orphan", "empty", "unknown"}
+        assert all(v == [] for v in buckets.values())
+
+    def test_classifies_four_cases(self, tmp_path: Path):
+        """One entry per status bucket, each landing in the right key."""
+        real = tmp_path / "real"
+        real.mkdir()
+        entries = [
+            (Path("f1"), str(real), 3, True),          # active
+            (Path("f2"), str(tmp_path / "gone"), 1, False),  # orphan
+            (Path("f3"), str(real), 0, True),          # empty
+            (Path("f4"), "<unknown: x>", 0, True),     # unknown
+        ]
+        b = _group_by_status(entries)
+        assert len(b["active"]) == 1
+        assert b["active"][0][2] == 3
+        assert len(b["orphan"]) == 1
+        assert b["orphan"][0][3] is False
+        assert len(b["empty"]) == 1
+        assert b["empty"][0][2] == 0
+        assert len(b["unknown"]) == 1
+        assert b["unknown"][0][1].startswith("<unknown")
+
+
+class TestPickProject:
+    """Step-1 two-stage flow: status filter → project pick."""
+
+    def _stub_select(
+        self, monkeypatch, return_value: str
+    ) -> dict[str, int]:
+        """Replace ``questionary.select`` with a recorder + fixed return.
+
+        Returns a dict that will be mutated to hold ``choices_seen`` —
+        the number of rows passed into the last select call. Lets tests
+        assert on "how many projects were offered after filtering".
+        """
+        captured = {"choices_seen": 0}
+
+        class _Sel:
+            def __init__(self, *_a, **kwargs):
+                captured["choices_seen"] = len(kwargs.get("choices", []))
+
+            def ask(self):
+                return return_value
+
+        import questionary as q
+
+        monkeypatch.setattr(q, "select", _Sel)
+        return captured
+
+    def test_filter_all_offers_every_project(self, monkeypatch, tmp_path: Path):
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        for name, sub in [("D--a", "real_a"), ("D--b", "real_b")]:
+            (tmp_path / sub).mkdir()
+            enc = projects / name
+            enc.mkdir()
+            (enc / "s.jsonl").write_text(
+                json.dumps({"cwd": str(tmp_path / sub)}) + "\n",
+                encoding="utf-8",
+            )
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "all")
+        captured = self._stub_select(monkeypatch, return_value="picked")
+        result = tui.pick_project(projects)
+        assert captured["choices_seen"] == 2
+        assert result == "picked"
+
+    def test_filter_active_hides_orphans(self, monkeypatch, tmp_path: Path):
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        # One active (real folder exists) and one orphan.
+        real = tmp_path / "real"
+        real.mkdir()
+        active = projects / "D--active"
+        active.mkdir()
+        (active / "s.jsonl").write_text(
+            json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+        )
+        orphan = projects / "D--orphan"
+        orphan.mkdir()
+        (orphan / "s.jsonl").write_text(
+            json.dumps({"cwd": str(tmp_path / "gone")}) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "active")
+        captured = self._stub_select(monkeypatch, return_value="picked")
+        tui.pick_project(projects)
+        assert captured["choices_seen"] == 1
+
+    def test_filter_cancel_returns_none(self, monkeypatch, tmp_path: Path):
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        real = tmp_path / "real"
+        real.mkdir()
+        enc = projects / "D--x"
+        enc.mkdir()
+        (enc / "s.jsonl").write_text(
+            json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: None)
+        assert tui.pick_project(projects) is None
+
+    def test_empty_projects_dir_skips_filter_stage(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """No entries at all → early-return before asking about filters."""
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        called = {"count": 0}
+
+        def should_not_be_called(_b):
+            called["count"] += 1
+            return "all"
+
+        monkeypatch.setattr(tui, "_pick_status_filter", should_not_be_called)
+        assert tui.pick_project(projects) is None
+        assert called["count"] == 0

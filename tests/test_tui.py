@@ -442,6 +442,25 @@ class TestChoiceTitle:
         assert self._icon(title) == _ICON_UNKNOWN
         assert "ansiyellow" in self._cwd_style(title)
 
+    def test_no_conflict_suffix_by_default(self):
+        """Backwards-compat: default call produces the old 5-segment shape."""
+        title = _choice_title(r"D:\dev_code\x", 5, cwd_exists=True)
+        assert len(title) == 5
+
+    def test_conflict_folder_appends_from_suffix(self):
+        """A cwd that collides with another row gets a dim-yellow ``⚠ from:`` tail."""
+        title = _choice_title(
+            r"D:\dev_code\x",
+            5,
+            cwd_exists=True,
+            conflict_folder="-mnt-d-dev-code",
+        )
+        assert len(title) == 6
+        style, text = title[5]
+        assert "ansiyellow" in style
+        assert "-mnt-d-dev-code" in text
+        assert "from:" in text
+
 
 class TestRunInteractiveMove:
     """Monkeypatches the three prompt helpers to simulate user interaction."""
@@ -951,6 +970,97 @@ class TestPickProject:
         monkeypatch.setattr(tui, "_pick_status_filter", should_not_be_called)
         assert tui.pick_project(projects) is None
         assert called["count"] == 0
+
+    def test_duplicate_cwd_rows_get_from_suffix(self, monkeypatch, tmp_path: Path):
+        """Two project folders pointing at the same cwd both get ``⚠ from:`` suffix.
+
+        Reproduces the WSL-style leak case: ``-mnt-d-dev-code/`` and
+        ``D--dev-code-x/`` both record ``D:\\dev_code\\x`` as cwd, so the
+        picker would show two visually identical rows. The folder-source
+        suffix disambiguates them.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        real = tmp_path / "real"
+        real.mkdir()
+        # Two folders with overlapping cwd.
+        for folder in ("D--dev-code-x", "-mnt-d-dev-code"):
+            p = projects / folder
+            p.mkdir()
+            (p / "s.jsonl").write_text(
+                json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+            )
+
+        captured_titles: list[list[tuple[str, str]]] = []
+
+        class _Sel:
+            def __init__(self, *_a, **kwargs):
+                for choice in kwargs.get("choices", []):
+                    captured_titles.append(choice.title)
+
+            def ask(self):
+                return str(real)
+
+            def unsafe_ask(self):
+                return str(real)
+
+        import questionary as q
+
+        monkeypatch.setattr(q, "select", _Sel)
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "all")
+
+        tui.pick_project(projects)
+
+        assert len(captured_titles) == 2
+        for title in captured_titles:
+            flat = "".join(text for _style, text in title)
+            assert "⚠ from:" in flat
+        # Each row references its own source folder, not a merged blob.
+        folder_names = {
+            text.split("from:")[-1].strip()
+            for title in captured_titles
+            for _style, text in title
+            if "from:" in text
+        }
+        assert folder_names == {"D--dev-code-x", "-mnt-d-dev-code"}
+
+    def test_unique_cwds_get_no_from_suffix(self, monkeypatch, tmp_path: Path):
+        """When no cwd collides, rows stay clean — suffix is strictly opt-in."""
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        for name, sub in [("D--a", "real_a"), ("D--b", "real_b")]:
+            (tmp_path / sub).mkdir()
+            enc = projects / name
+            enc.mkdir()
+            (enc / "s.jsonl").write_text(
+                json.dumps({"cwd": str(tmp_path / sub)}) + "\n",
+                encoding="utf-8",
+            )
+
+        captured_titles: list[list[tuple[str, str]]] = []
+
+        class _Sel:
+            def __init__(self, *_a, **kwargs):
+                for choice in kwargs.get("choices", []):
+                    captured_titles.append(choice.title)
+
+            def ask(self):
+                return "picked"
+
+            def unsafe_ask(self):
+                return "picked"
+
+        import questionary as q
+
+        monkeypatch.setattr(q, "select", _Sel)
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "all")
+
+        tui.pick_project(projects)
+
+        assert len(captured_titles) == 2
+        for title in captured_titles:
+            flat = "".join(text for _style, text in title)
+            assert "from:" not in flat
 
     def test_esc_at_project_list_loops_back_to_filter(
         self, monkeypatch, tmp_path: Path

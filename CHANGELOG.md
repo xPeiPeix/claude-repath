@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-04-24
+
+### Added
+
+- **Conflict marker for duplicate-cwd picker rows.** When two projects
+  under ``~/.claude/projects/`` record the same ``cwd`` value (classic
+  case: a WSL-launched session at ``/mnt/d/dev_code`` encodes as
+  ``-mnt-d-dev-code/`` but its jsonl lines carry ``D:\dev_code\x`` from a
+  later ``--add-dir`` / cwd switch, colliding with the native
+  ``D--dev-code-x/`` folder), the Step-1 picker previously rendered two
+  visually indistinguishable rows — the user couldn't tell which
+  ``<encoded>/`` directory each one lived in. v0.9.0 now appends a
+  dim-yellow ``⚠ from: <folder>`` suffix to colliding rows, keeping
+  non-colliding rows untouched. Collision detection scopes to the
+  currently-visible filter bucket, so a row visible in isolation stays
+  clean.
+
+  ``_choice_title`` gains an opt-in keyword-only ``conflict_folder``
+  argument; ``pick_project`` builds the collision set from the filtered
+  entries with a single ``Counter`` pass. Four new tests pin the
+  backwards-compat shape, the suffix content/style, and the end-to-end
+  collision + unique behaviors under ``pick_project``.
+
 ## [0.8.2] — 2026-04-24
 
 ### Fixed
@@ -556,7 +579,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.7.0...v0.8.0

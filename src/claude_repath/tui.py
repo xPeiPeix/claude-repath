@@ -416,7 +416,13 @@ def _legend_bar() -> None:
     )
 
 
-def _choice_title(cwd: str, sessions: int, cwd_exists: bool) -> list[tuple[str, str]]:
+def _choice_title(
+    cwd: str,
+    sessions: int,
+    cwd_exists: bool,
+    *,
+    conflict_folder: str | None = None,
+) -> list[tuple[str, str]]:
     """Build a prompt_toolkit FormattedText title for one picker entry.
 
     Returns a list of ``(style, text)`` tuples. ``style`` uses prompt_toolkit
@@ -428,6 +434,15 @@ def _choice_title(cwd: str, sessions: int, cwd_exists: bool) -> list[tuple[str, 
         * resolved cwd + folder missing   → 🔴 red cwd + bold red count
         * resolved cwd + 0 sessions       → ⚪ fully dimmed row
         * resolved cwd + sessions ≥ 1     → 🟢 + green count (bold if ≥ 10)
+
+    When ``conflict_folder`` is provided, a dim-yellow ``⚠ from: <folder>``
+    segment is appended. ``pick_project`` sets this only for entries whose
+    cwd value collides with another row in the same filtered view — usually
+    one project folder name encodes the cwd (e.g. ``D--dev-code-x``) while
+    another was recorded under a different startup cwd (e.g. ``-mnt-d-...``
+    from a WSL-launched session). Two rows showing the same path is
+    otherwise indistinguishable; the suffix tells the user which
+    ``~/.claude/projects/<folder>/`` directory each one lives in.
     """
     is_unknown = cwd.startswith("<unknown")
     if is_unknown:
@@ -448,13 +463,16 @@ def _choice_title(cwd: str, sessions: int, cwd_exists: bool) -> list[tuple[str, 
         session_style = "fg:ansigreen bold" if sessions >= 10 else "fg:ansigreen"
 
     session_label = f"{sessions} session{'s' if sessions != 1 else ''}"
-    return [
+    segments: list[tuple[str, str]] = [
         ("", f"{icon}  "),
         (cwd_style, cwd),
         ("", "  ["),
         (session_style, session_label),
         ("", "]"),
     ]
+    if conflict_folder is not None:
+        segments.append(("fg:ansiyellow", f"  ⚠ from: {conflict_folder}"))
+    return segments
 
 
 def pick_project(projects_dir: Path) -> str | None:
@@ -492,9 +510,27 @@ def pick_project(projects_dir: Path) -> str | None:
             _notify(f"No '{filter_key}' projects to pick.")
             continue
 
+        # Flag cwd collisions within the currently-visible bucket so the
+        # user can tell which ``~/.claude/projects/<folder>/`` each row
+        # came from. Happens when the same logical directory was launched
+        # from two different startup cwds (classic case: a WSL session
+        # with ``/mnt/d/...`` alongside a native ``D:\...`` one).
+        cwd_counts: dict[str, int] = {}
+        for _f, cwd, _n, _e in filtered:
+            cwd_counts[cwd] = cwd_counts.get(cwd, 0) + 1
+        duplicated_cwds = {k for k, v in cwd_counts.items() if v > 1}
+
         choices = [
-            questionary.Choice(title=_choice_title(cwd, n, exists), value=cwd)
-            for _folder, cwd, n, exists in filtered
+            questionary.Choice(
+                title=_choice_title(
+                    cwd,
+                    n,
+                    exists,
+                    conflict_folder=folder.name if cwd in duplicated_cwds else None,
+                ),
+                value=cwd,
+            )
+            for folder, cwd, n, exists in filtered
         ]
         _help_bar(
             [

@@ -386,6 +386,12 @@ def _show_banner() -> None:
 
 
 def _step_banner(step: int, title: str, subtitle: str | None = None) -> None:
+    # Blank line before every banner after Step 1 so consecutive panels
+    # (e.g. the tail of Step 2's path-preview flowing into Step 3's
+    # Review & confirm header) don't glue together. Step 1 already has
+    # the REPATH splash above it, so the extra gap would look odd there.
+    if step > 1:
+        _console.print()
     icon = _STEP_ICONS.get(step, "")
     heading = f"{icon}  {title}" if icon else title
     body = f"[bold]{heading}[/bold]"
@@ -552,30 +558,31 @@ def pick_project(projects_dir: Path) -> str | None:
 
 
 def prompt_new_path(old_path: str) -> str | None:
-    """Step 2/3: two-stage input + live path preview + action menu.
+    """Step 2: collect the new location, returning an absolute path.
 
     Returns one of three things:
-        * Normalized absolute path string → proceed to Step 3
+        * Normalized absolute path string → caller proceeds to Step 3
         * ``None`` → user cancelled the whole flow
         * :data:`_BACK` → user asked to go back to Step 1 (re-pick project)
 
-    Esc bindings speed up in-flow navigation without menu clicks:
+    The path goes straight to Step 3 once both fields are filled — prior
+    versions inserted an extra "Confirm the new location?" action menu
+    between Step 2 and the Migration Preview, which double-prompted the
+    same decision (the Step 3 preview already offers a Yes/Edit/Back
+    selector over the *same* path). v0.9.1 collapses the two into one.
+
+    Esc bindings:
         * Esc at the parent field → return :data:`_BACK` (jumps to Step 1)
         * Esc at the name field   → loop back to re-enter parent (inner)
-        * Esc at the action menu  → equivalent to choosing "Back"
 
-    ``Edit`` in the action menu loops back to re-enter fields with last
-    inputs retained as defaults, so a typo in one field doesn't force
-    re-typing the other.
+    The parent-does-not-exist confirm is kept inline here (not deferred
+    to Step 3), so an obviously-typo parent is caught at the moment of
+    entry rather than after building a full migration plan.
     """
     old = Path(old_path)
     current_parent = str(old.parent)
     current_name = old.name
 
-    # Render the banner + help bar once on entry, not on every Edit loop.
-    # The previous placement caused stacked Step-2 banners when the user
-    # cycled through the action menu's Edit option, visually noisy and
-    # confusing.
     _step_banner(
         2,
         "Choose the new location",
@@ -621,25 +628,6 @@ def prompt_new_path(old_path: str) -> str | None:
 
         _print_path_preview(old_path, str(new_path_abs))
 
-        action = _ask_action(
-            "Confirm the new location?",
-            [
-                ("✅  Continue — preview plan (Step 3)", "confirm"),
-                ("✏️  Edit — re-enter parent / name", "edit"),
-                ("⬅️  Back to project selection (Step 1)", "back"),
-                ("❌  Cancel", "cancel"),
-            ],
-        )
-
-        if action is None or action == "cancel":
-            return None
-        if action == "back" or action == _BACK:
-            # Menu "Back" and Esc (which _ask_action turns into _BACK) are
-            # two input paths to the same outcome — bubble up to Step 1.
-            return _BACK
-        if action == "edit":
-            continue
-        # action == "confirm"
         if not parent.exists():
             create = questionary.confirm(
                 f"Parent directory does not exist:\n  {parent}\n"
@@ -647,10 +635,9 @@ def prompt_new_path(old_path: str) -> str | None:
                 default=True,
             ).ask()
             if not create:
-                # Declining creation is an implicit cancel — the user can
-                # still Edit via the action menu to pick a different parent
-                # without leaving the flow. Treating this as continue would
-                # infinite-loop with a fixed-stub test and muddle the UX.
+                # Declining creation is an implicit cancel — Step 3's
+                # Edit option is the path to "try a different parent"
+                # without leaving the flow.
                 return None
         return str(new_path_abs)
 
@@ -716,10 +703,12 @@ def run_interactive_move(
     """Full interactive flow with bidirectional navigation between steps.
 
     Forward: Step 1 (pick) → Step 2 (new location) → Step 3 (plan & confirm).
-    Backward: Step 2 action menu can jump to Step 1; Step 3 action menu can
-    jump to Step 2. On jumping back, the *earlier* step's selection is
-    discarded (so we re-prompt fresh) but the *later* step keeps its state
-    until the user reaches it again.
+    Backward: Step 3 action menu offers Edit (re-run Step 2) and
+    Back-to-project-selection (re-run Step 1); Esc at Step 2 parent input
+    jumps straight to Step 1. Confirmation happens **once**, at Step 3,
+    where the user can also see the concrete per-layer action counts —
+    the Step 2 "Confirm the new location?" menu was collapsed in v0.9.1
+    because it double-prompted the same decision.
 
     Returns ``(old_path, new_path)`` on final confirm, or ``None`` when the
     user cancels anywhere.
@@ -768,15 +757,21 @@ def run_interactive_move(
             "Proceed with migration?",
             [
                 ("✅  Yes, proceed", "proceed"),
-                ("⬅️  Back — re-enter the new location (Step 2)", "back"),
+                ("✏️  Edit — re-enter path (Step 2)", "edit"),
+                ("⬅️  Back to project selection (Step 1)", "back_to_pick"),
                 ("❌  No, cancel", "cancel"),
             ],
         )
 
         if action is None or action == "cancel":
             return None
-        if action == "back" or action == _BACK:
-            # Menu "Back" and Esc both rewind one step.
+        if action == "edit" or action == _BACK:
+            # Edit and Esc both rewind to Step 2, keeping the picked project.
+            new = None
+            continue
+        if action == "back_to_pick":
+            # Full rewind — re-enter Step 1 and discard the new-path too.
+            old = None
             new = None
             continue
         # action == "proceed"

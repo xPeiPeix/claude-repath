@@ -529,11 +529,13 @@ class TestRunInteractiveMove:
         # Failure aborts before reaching the action menu.
         assert tui.run_interactive_move(tmp_path) is None
 
-    def test_step3_back_re_prompts_new_path_only(self, monkeypatch, tmp_path: Path):
-        """Step 3 "Back" re-runs prompt_new_path but keeps the picked project.
+    def test_step3_edit_re_prompts_new_path_only(self, monkeypatch, tmp_path: Path):
+        """Step 3 "Edit" re-runs prompt_new_path but keeps the picked project.
 
         Pinned invariant: prompt_new_path called twice, pick_project called
-        once — exactly what the "go back to Step 2" UX promises.
+        once — the "go back to Step 2" UX promise. In v0.9.1 this action
+        is labelled ``edit`` (Step 2's own Edit action menu was removed
+        and the semantics migrated onto Step 3's menu).
         """
         from claude_repath.migrate import PlanReport
 
@@ -550,7 +552,7 @@ class TestRunInteractiveMove:
             prompt_calls.append(1)
             return next(new_paths)
 
-        actions = iter(["back", "proceed"])
+        actions = iter(["edit", "proceed"])
         monkeypatch.setattr(tui, "pick_project", fake_pick)
         monkeypatch.setattr(tui, "prompt_new_path", fake_prompt)
         monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
@@ -560,6 +562,40 @@ class TestRunInteractiveMove:
         assert len(pick_calls) == 1
         assert len(prompt_calls) == 2
         assert result == (r"D:\old", r"D:\new_attempt_2")
+
+    def test_step3_back_to_pick_re_enters_step1(self, monkeypatch, tmp_path: Path):
+        """Step 3 "Back to project selection" discards both prior picks.
+
+        New in v0.9.1: the Step 3 menu gains a ``back_to_pick`` option
+        that re-runs Step 1 (project picker) instead of just Step 2.
+        Both ``pick_project`` and ``prompt_new_path`` are invoked twice.
+        """
+        from claude_repath.migrate import PlanReport
+
+        pick_calls: list[int] = []
+        olds = iter([r"D:\old_1", r"D:\old_2"])
+
+        def fake_pick(_projects_dir):
+            pick_calls.append(1)
+            return next(olds)
+
+        prompt_calls: list[int] = []
+        news = iter([r"D:\new_1", r"D:\new_2"])
+
+        def fake_prompt(_old):
+            prompt_calls.append(1)
+            return next(news)
+
+        actions = iter(["back_to_pick", "proceed"])
+        monkeypatch.setattr(tui, "pick_project", fake_pick)
+        monkeypatch.setattr(tui, "prompt_new_path", fake_prompt)
+        monkeypatch.setattr(tui, "plan_migration", lambda _ctx: PlanReport(entries=[]))
+        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: next(actions))
+
+        result = tui.run_interactive_move(tmp_path)
+        assert len(pick_calls) == 2
+        assert len(prompt_calls) == 2
+        assert result == (r"D:\old_2", r"D:\new_2")
 
     def test_step2_back_re_prompts_pick_project(self, monkeypatch, tmp_path: Path):
         """``prompt_new_path`` returning :data:`_BACK` re-opens the picker."""
@@ -591,7 +627,14 @@ class TestRunInteractiveMove:
 
 
 class TestPromptNewPath:
-    """Two-stage path input: parent directory + project name composition."""
+    """Two-stage path input: parent directory + project name composition.
+
+    v0.9.1 collapsed the trailing "Confirm the new location?" action menu
+    into Step 3's Proceed menu — these tests no longer stub an
+    ``_ask_action`` response, because ``prompt_new_path`` returns as soon
+    as both fields are filled (plus the parent-creation confirm when the
+    parent is missing).
+    """
 
     def _stub(
         self,
@@ -599,19 +642,13 @@ class TestPromptNewPath:
         parent: str | None,
         name: str | None,
         create_parent: bool | None = True,
-        action: str = "confirm",
     ) -> None:
         """Replace questionary calls with deterministic answers.
 
         The stub Question objects implement both ``ask`` (used by the
-        parent-creation confirm) and ``unsafe_ask`` (used by v0.8+
+        parent-creation confirm) and ``unsafe_ask`` (used by
         ``_ask_with_back`` for the parent / name inputs), so the same
         helper works with both styles.
-
-        ``action`` controls the Step-2 action menu verdict. Default
-        ``"confirm"`` preserves the pre-v0.7 test semantics. Pass
-        ``"back"`` / ``"cancel"`` / ``"edit"`` / :data:`_BACK` to
-        exercise the other branches.
         """
 
         class _StubPath:
@@ -635,7 +672,6 @@ class TestPromptNewPath:
         monkeypatch.setattr(q, "path", lambda *a, **k: _StubPath(parent))
         monkeypatch.setattr(q, "text", lambda *a, **k: _StubText(name))
         monkeypatch.setattr(q, "confirm", lambda *a, **k: _StubConfirm(create_parent))
-        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: action)
 
     def test_parent_and_name_joined(self, monkeypatch, tmp_path: Path):
         # existing parent → no creation confirm needed
@@ -674,7 +710,6 @@ class TestPromptNewPath:
 
         monkeypatch.setattr(q, "path", lambda *a, **k: _P())
         monkeypatch.setattr(q, "text", fake_text)
-        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "confirm")
         # Use a cross-platform path literal — a hard-coded "D:\..." string
         # parses differently on POSIX (whole string treated as the name)
         # vs Windows (drive letter → real parent/name split).
@@ -733,7 +768,6 @@ class TestPromptNewPath:
         monkeypatch.setattr(q, "path", lambda *a, **k: _P())
         monkeypatch.setattr(q, "text", lambda *a, **k: _T())
         monkeypatch.setattr(q, "confirm", lambda *a, **k: _C())
-        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: "confirm")
 
         out = tui.prompt_new_path(r"D:\projects\original")
         assert out is not None
@@ -741,48 +775,6 @@ class TestPromptNewPath:
         home = str(Path.home())
         assert out.startswith(home)
         assert out.endswith("foo")
-
-    def test_back_action_returns_back_sentinel(self, monkeypatch, tmp_path: Path):
-        """The action menu's ``Back`` choice signals the outer flow to re-pick."""
-        existing = tmp_path / "dest"
-        existing.mkdir()
-        self._stub(monkeypatch, parent=str(existing), name="proj", action="back")
-        assert tui.prompt_new_path(str(tmp_path / "old")) == _BACK
-
-    def test_cancel_action_returns_none(self, monkeypatch, tmp_path: Path):
-        """Choosing Cancel at the action menu aborts the whole flow."""
-        existing = tmp_path / "dest"
-        existing.mkdir()
-        self._stub(monkeypatch, parent=str(existing), name="proj", action="cancel")
-        assert tui.prompt_new_path(str(tmp_path / "old")) is None
-
-    def test_edit_action_loops_and_can_confirm(self, monkeypatch, tmp_path: Path):
-        """``Edit`` loops back to re-prompt; a subsequent ``confirm`` must work."""
-        existing = tmp_path / "dest"
-        existing.mkdir()
-
-        # Cycle: edit → confirm (two iterations of the inner while loop).
-        actions = iter(["edit", "confirm"])
-
-        class _StubVal:
-            def __init__(self, val):
-                self._val = val
-
-            def ask(self):
-                return self._val
-
-            def unsafe_ask(self):
-                return self._val
-
-        import questionary as q
-
-        monkeypatch.setattr(q, "path", lambda *a, **k: _StubVal(str(existing)))
-        monkeypatch.setattr(q, "text", lambda *a, **k: _StubVal("proj"))
-        monkeypatch.setattr(q, "confirm", lambda *a, **k: _StubVal(True))
-        monkeypatch.setattr(tui, "_ask_action", lambda *a, **k: next(actions))
-
-        out = tui.prompt_new_path(str(tmp_path / "old"))
-        assert out == str(existing / "proj")
 
     def test_esc_at_parent_returns_back_sentinel(
         self, monkeypatch, tmp_path: Path
@@ -834,16 +826,6 @@ class TestPromptNewPath:
 
         out = tui.prompt_new_path(str(tmp_path / "old"))
         assert out == str(existing / "proj")
-
-    def test_esc_at_action_menu_treated_as_back(
-        self, monkeypatch, tmp_path: Path
-    ):
-        """When the action menu returns :data:`_BACK` (Esc), propagate it."""
-        existing = tmp_path / "dest"
-        existing.mkdir()
-        self._stub(monkeypatch, parent=str(existing), name="proj", action=_BACK)
-        assert tui.prompt_new_path(str(tmp_path / "old")) == _BACK
-
 
 class TestGroupByStatus:
     """Bucketing helper that feeds the Step-1a filter menu."""

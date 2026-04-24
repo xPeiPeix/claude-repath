@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-04-24
+
+### Changed
+
+- **Step 2/3 confirmation merged.** The trailing "Confirm the new
+  location?" action menu at the end of Step 2 was collapsed into Step
+  3's Proceed menu — both menus confirmed the same decision (one over
+  a path, one over the same path plus a plan-count breakdown), which
+  felt like redundant friction. ``prompt_new_path`` now returns the
+  composed path as soon as parent + name are filled (and the
+  parent-creation confirm, when applicable), and Step 3's menu gains
+  the displaced navigation options:
+
+  ```
+  Proceed with migration?
+    ✅  Yes, proceed
+    ✏️  Edit — re-enter path (Step 2)
+    ⬅️  Back to project selection (Step 1)
+    ❌  No, cancel
+  ```
+
+  ``Edit`` re-runs Step 2 keeping the picked project; ``Back to project
+  selection`` rewinds all the way to Step 1; Esc on the menu is
+  equivalent to ``Edit``. Four previously-needed tests for the removed
+  Step 2 action menu were deleted; two new tests pin the Step 3 edit /
+  back_to_pick navigation semantics.
+
+### Added
+
+- **Explicit stage markers during migration.** ``move_cmd`` now prints
+  a permanent ``● Moving project folder`` / ``● Rewiring Claude Code
+  state`` line before each phase in addition to the existing spinner.
+  Rich's ``console.status`` spinner is live-redrawn and leaves no
+  trace in the scrollback, so on larger moves (or in terminals that
+  render spinner frames unreliably) the user saw a silent gap and
+  suspected a hang. The ``●`` lines stay in the output both during
+  and after execution, so "what phase am I in" is answerable at a
+  glance.
+
+### Fixed
+
+- **Visual glue between Step 2 and Step 3 panels.** ``_step_banner``
+  now emits a blank line before every step after the first, so the
+  Step 3 ``Review & confirm`` Panel doesn't abut the tail of Step 2's
+  path-preview / confirmation output. Step 1 keeps no leading blank
+  because the REPATH splash already provides separation.
+
 ## [0.9.0] — 2026-04-24
 
 ### Added
@@ -579,7 +626,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.0...v0.8.1

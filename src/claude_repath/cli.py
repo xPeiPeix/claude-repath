@@ -242,8 +242,18 @@ def move_cmd(
 
     moved = False
     if not no_move:
+        # Explicit stage marker in addition to the spinner — the spinner
+        # is live-redrawn and leaves no trace in the scrollback, so on
+        # larger moves (or in terminals that don't render spinner frames
+        # well) the user just saw a gap and suspected a hang. Print a
+        # permanent "●" line before each stage so the phase is visible
+        # both during and after execution.
+        console.print(
+            f"[cyan]●[/cyan] Moving project folder  "
+            f"[dim]{old_path} → {new_path}[/dim]"
+        )
         try:
-            with console.status("[cyan]Moving project folder...", spinner="dots"):
+            with console.status("[dim]copying files...[/dim]", spinner="dots"):
                 move_project_folder(old_path, new_path)
             moved = True
         except (FileNotFoundError, FileExistsError) as exc:
@@ -259,7 +269,8 @@ def move_cmd(
             )
             raise typer.Exit(code=1) from exc
 
-    with console.status("[cyan]Rewiring Claude Code state...", spinner="dots"):
+    console.print("[cyan]●[/cyan] Rewiring Claude Code state")
+    with console.status("[dim]updating state files...[/dim]", spinner="dots"):
         report = apply_migration(ctx, session)
     report.moved_folder = moved
     _print_apply(report)

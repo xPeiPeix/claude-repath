@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-04-24
+
+### Fixed
+
+- **Esc latency still ~1 s after v0.8.1 despite ``timeoutlen = 0``.**
+  prompt_toolkit has *two* escape-timer knobs on ``Application``:
+  - ``timeoutlen`` — gates multi-key bindings (e.g. ``Ctrl-X Ctrl-S``)
+    waiting for the second key
+  - ``ttimeoutlen`` — gates terminal-level escape-sequence detection
+    (single Esc vs ``ESC [ A`` arrow keys)
+
+  v0.8.1 zeroed only the first, leaving the single-Esc path pinned at
+  the ~500 ms terminal timer. Debug instrumentation on a Windows
+  PowerShell session confirmed this: ``timeoutlen`` was 0.0 as written,
+  but the Esc handler still only fired ~1 s after the keystroke (time
+  delta between ``about to call unsafe_ask`` and ``esc handler fired``
+  in the trace). Setting ``ttimeoutlen = 0.01`` collapses the terminal
+  timer too and Esc now fires on keydown. Users should notice the Back
+  transition as effectively instant (~10 ms vs the old ~1 s).
+
 ## [0.8.1] — 2026-04-24
 
 ### Fixed
@@ -536,7 +556,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.6.0...v0.7.0

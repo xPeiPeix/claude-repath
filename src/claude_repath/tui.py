@@ -103,14 +103,22 @@ def _attach_esc_back(question):
     existing = app.key_bindings
     app.key_bindings = merge_key_bindings([existing, _esc_back_kb()])
     # Collapse prompt_toolkit's escape-timeout so a single Esc press fires
-    # immediately instead of waiting ~500 ms for a possible Alt-<key>
-    # combo. ``eager=True`` on the binding alone isn't enough — Esc is a
-    # prefix key and the global timeoutlen still gates it. Cost: we can't
-    # synthesize Alt-<key> combos, which this TUI doesn't use.
+    # immediately instead of waiting ~500 ms. Two separate timers to
+    # zero-out: ``timeoutlen`` gates multi-key bindings (e.g. Ctrl-X Ctrl-S)
+    # waiting for a second key; ``ttimeoutlen`` gates terminal-level
+    # escape-sequence detection (Esc alone vs Esc-[-A arrow keys). The
+    # v0.8.1 fix only lowered ``timeoutlen``, leaving the user with a
+    # ~1 s Esc latency driven by the terminal-timer. Setting ``ttimeoutlen``
+    # to 0.01 s collapses that path too. Cost: we can't synthesize
+    # Alt-<key> combos, which this TUI doesn't use.
     try:
         app.timeoutlen = 0.0
     except AttributeError:
         pass  # older prompt_toolkit without the attribute — still usable
+    try:
+        app.ttimeoutlen = 0.01
+    except AttributeError:
+        pass
     return question
 
 

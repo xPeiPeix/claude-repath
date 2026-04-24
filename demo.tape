@@ -1,5 +1,5 @@
 # =============================================================================
-# claude-repath v0.5 — TUI wizard demo (Linux render)
+# claude-repath v0.9.1 — TUI wizard demo (Linux render)
 #
 # Tool:      https://github.com/charmbracelet/vhs
 # Reqs:      vhs 0.11+, ttyd 1.7+, ffmpeg 4+, claude-repath (via pipx/pip --user)
@@ -9,10 +9,15 @@
 # Why Linux-shaped paths? vhs runs best on Linux (Windows has no native ttyd).
 # The CLI itself supports Windows paths first-class — see README for examples.
 #
-# v0.5 highlights on display:
+# v0.9.1 highlights on display:
 #   * grayscale REPATH ASCII banner at splash
 #   * wizard-step icons (📋 / 📍 / 🚀)
+#   * Step-1a status-filter menu (active / orphan / empty / unknown / all)
 #   * 4-state picker with 🟢 / 🔴 / ⚪ / ❓ icons + legend bar
+#   * single-confirmation flow: Step 2 returns straight to Step 3's
+#     Proceed menu (no more double "Confirm the new location?" prompt)
+#   * explicit stage markers during migration: "● Moving project folder",
+#     "● Rewiring Claude Code state" — replaces the silent-spinner look
 # =============================================================================
 
 Output demo.gif
@@ -41,28 +46,33 @@ Enter
 Show
 
 # ---- Intro comment ---------------------------------------------------------
-Type "# claude-repath v0.5 — relocate Claude Code projects without losing state"
+Type "# claude-repath v0.9 — relocate Claude Code projects without losing state"
 Sleep 2s
 Ctrl+U
 
 # ---- Launch the interactive wizard -----------------------------------------
 Type "claude-repath move"
 Enter
-# Give viewers time to read the REPATH banner + legend + the 4-status list
-Sleep 5s
+# Give viewers time to read the REPATH banner + legend
+Sleep 4s
 
-# ---- Step 1/3: pick project (default highlight = top active entry) ---------
+# ---- Step 1a: status filter (default cursor lands on "active") -------------
+Sleep 1s
+Enter
+Sleep 1500ms
+
+# ---- Step 1b: pick project (default highlight = top active entry) ----------
 Enter
 Sleep 2s
 
-# ---- Step 2/3: parent directory --------------------------------------------
+# ---- Step 2: parent directory ----------------------------------------------
 # Ctrl+U wipes questionary's pre-filled default, otherwise Type appends.
 Ctrl+U
 Type "/tmp/archive/"
 Sleep 800ms
 Enter
 
-# ---- Step 2/3: project name (default accepts) ------------------------------
+# ---- Step 2: project name (accept default) ---------------------------------
 Sleep 600ms
 Enter
 
@@ -70,12 +80,14 @@ Enter
 Sleep 600ms
 Enter
 
-# ---- Step 3/3: preview panel (let viewers read) ----------------------------
-Sleep 4500ms
+# ---- Step 3: Migration Preview (let viewers read the per-layer counts) -----
+# No separate "Confirm the new location?" menu in v0.9.1 — name input flows
+# straight into Step 3. The Proceed menu cursor defaults to "Yes, proceed".
+Sleep 5s
+Enter
 
-# ---- Confirm & watch spinner + success panel -------------------------------
-Type "y"
-Sleep 4s
+# ---- Watch stage markers ("● Moving..." / "● Rewiring...") + summary -------
+Sleep 5s
 
 # ---- Outro -----------------------------------------------------------------
 Type "# Done — folder moved, ~/.claude/projects/ renamed, session jsonls rewired"

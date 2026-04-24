@@ -38,6 +38,11 @@ grep -Hn "version\|__version__" pyproject.toml src/claude_repath/__init__.py .cl
   - **禁止**相对路径 `./demo.gif` — PyPI 不渲染相对路径，破图（v0.5.0 翻车案例）
 - [ ] badges 链接指向正确的默认分支（`main`，不是 `master`）
 - [ ] Install 章节同时覆盖三条路径：PyPI CLI（uvx/pipx/pip）、Claude Code plugin（`/plugin marketplace add`）、skills.sh 生态（`npx skills add xPeiPeix/claude-repath`）
+- [ ] **Roadmap 段更新**（极易漏）：
+  - [ ] 原来的 `**vA.B.C (current)**` 去掉 `(current)` 标签
+  - [ ] 在顶部插入 `**vX.Y.Z (current)**` 新条目，技术性段落描述核心变更（风格参考旧条目）
+  - [ ] 验证：`grep "(current)" README.md` 只出现一次，且是新版
+  - 历史教训：v0.9.0 / v0.9.1 连续两次 release 都漏了这条，PyPI 和 README 上新版已发布但 Roadmap 仍指向 v0.8.2。这条单独列成 checklist 就是因为容易漏。
 
 ## 5. Commit + Tag + Release（三步，不可合并）
 

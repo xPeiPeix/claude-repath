@@ -1093,6 +1093,62 @@ class TestPickProject:
         assert filter_calls["count"] == 2  # re-entered filter after Esc
         assert result == "picked_cwd"
 
+    def test_exclude_unknown_filters_out_unknown_entries(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """``exclude_unknown=True`` drops ``<unknown: ...>`` placeholder rows.
+
+        Doctor uses this to avoid feeding the picker's synthetic placeholder
+        back into ``MigrationContext`` as if it were a real path.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        real = tmp_path / "real"
+        real.mkdir()
+        enc_active = projects / "D--active"
+        enc_active.mkdir()
+        (enc_active / "s.jsonl").write_text(
+            json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+        )
+        # Unknown: jsonl has no cwd field anywhere — discover_projects stamps
+        # it as "<unknown: D--unknown>".
+        enc_unknown = projects / "D--unknown"
+        enc_unknown.mkdir()
+        (enc_unknown / "s.jsonl").write_text(
+            json.dumps({"no_cwd_here": True}) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "all")
+        captured = self._stub_select(monkeypatch, return_value="picked")
+
+        tui.pick_project(projects, exclude_unknown=True)
+        assert captured["choices_seen"] == 1  # only the resolved active row
+
+    def test_unknown_visible_by_default(self, monkeypatch, tmp_path: Path):
+        """Default ``exclude_unknown=False`` keeps unknown rows visible.
+
+        Regression guard: ``move``'s wizard still shows unknown rows so
+        users can spot encoded folders whose cwd parsing failed.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        real = tmp_path / "real"
+        real.mkdir()
+        enc_active = projects / "D--active"
+        enc_active.mkdir()
+        (enc_active / "s.jsonl").write_text(
+            json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+        )
+        enc_unknown = projects / "D--unknown"
+        enc_unknown.mkdir()
+        (enc_unknown / "s.jsonl").write_text(
+            json.dumps({"no_cwd_here": True}) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "all")
+        captured = self._stub_select(monkeypatch, return_value="picked")
+
+        tui.pick_project(projects)
+        assert captured["choices_seen"] == 2  # both rows offered
+
 
 class TestAskWithBack:
     """Exception-to-sentinel translation used by the Esc key binding.
@@ -1213,3 +1269,219 @@ class TestErasePrevLines:
         tui._erase_prev_lines(2)
         captured = capsys.readouterr()
         assert captured.err == ""
+
+
+class TestHumanizeBackupTs:
+    def test_canonical_timestamp(self):
+        assert tui._humanize_backup_ts("20260427-153012") == "2026-04-27 15:30:12"
+
+    def test_collision_suffix_appended(self):
+        assert (
+            tui._humanize_backup_ts("20260427-153012-2")
+            == "2026-04-27 15:30:12 (#2)"
+        )
+
+    def test_multi_segment_suffix_joined(self):
+        assert (
+            tui._humanize_backup_ts("20260427-153012-2-3")
+            == "2026-04-27 15:30:12 (#2-3)"
+        )
+
+    def test_invalid_timestamp_returned_verbatim(self):
+        assert tui._humanize_backup_ts("not-a-timestamp") == "not-a-timestamp"
+
+    def test_unparseable_date_returned_verbatim(self):
+        # Looks like the right shape but fails strptime — return as-is so
+        # the picker still surfaces the directory.
+        assert tui._humanize_backup_ts("99999999-999999") == "99999999-999999"
+
+    def test_single_segment_returned_verbatim(self):
+        assert tui._humanize_backup_ts("20260427") == "20260427"
+
+
+class TestReadManifestEntryCount:
+    def test_valid_manifest_returns_count(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"entries": [{"x": 1}, {"y": 2}]}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) == 2
+
+    def test_empty_entries_returns_zero(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"entries": []}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) == 0
+
+    def test_missing_manifest_returns_none(self, tmp_path: Path):
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_malformed_json_returns_none(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text("not json", encoding="utf-8")
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_entries_not_list_returns_none(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"entries": "oops"}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_no_entries_key_returns_none(self, tmp_path: Path):
+        """``{}`` manifest with no ``entries`` key falls through to ``None``."""
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_non_dict_root_returns_none(self, tmp_path: Path):
+        """JSON list root must not crash on ``data.get('entries')``.
+
+        Without the ``isinstance(data, dict)`` guard this raises
+        ``AttributeError`` and aborts the whole rollback picker — one bad
+        manifest poisons every entry. Pinned regression invariant.
+        """
+        (tmp_path / "manifest.json").write_text(
+            json.dumps([1, 2, 3]), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_scalar_root_returns_none(self, tmp_path: Path):
+        """JSON scalar root (string / number) — same ``data.get`` trap."""
+        (tmp_path / "manifest.json").write_text(
+            json.dumps("just a string"), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_invalid_utf8_bytes_return_none(self, tmp_path: Path):
+        """``UnicodeDecodeError`` on non-UTF-8 bytes must collapse to ``None``.
+
+        ``Path.read_text(encoding="utf-8")`` raises ``UnicodeDecodeError``
+        (a ``ValueError`` subclass, *not* ``OSError``) on invalid byte
+        sequences. Without it in the except list, one bad manifest
+        aborts the entire rollback picker.
+        """
+        (tmp_path / "manifest.json").write_bytes(b"\xff\xfe invalid utf-8 bytes")
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+
+class TestRunInteractiveRollback:
+    """Pinned invariants for the rollback picker (TUI glue, not real prompts)."""
+
+    @staticmethod
+    def _silence_chrome(monkeypatch):
+        """Mute the visual chrome (banners + help bar) so tests focus on dispatch."""
+        monkeypatch.setattr(tui, "_show_banner", lambda: None)
+        monkeypatch.setattr(tui, "_solo_banner", lambda *_a, **_k: None)
+        monkeypatch.setattr(tui, "_help_bar", lambda *_a, **_k: None)
+
+    @staticmethod
+    def _stub_select(monkeypatch, return_value, capture: dict | None = None):
+        class _Sel:
+            def __init__(self, message, *, choices=None, **_k):
+                if capture is not None:
+                    capture["message"] = message
+                    capture["choices"] = list(choices or [])
+
+            def ask(self):
+                return return_value
+
+            def unsafe_ask(self):
+                return return_value
+
+        import questionary as q
+
+        monkeypatch.setattr(q, "select", _Sel)
+
+    def test_no_backups_returns_none(self, monkeypatch):
+        monkeypatch.setattr(tui, "list_backups", lambda _root=None: [])
+        assert tui.run_interactive_rollback() is None
+
+    def test_picks_chosen_timestamp(self, monkeypatch, tmp_path: Path):
+        self._silence_chrome(monkeypatch)
+        bdir = tmp_path / "20260427-153012"
+        bdir.mkdir()
+        (bdir / "manifest.json").write_text(
+            json.dumps(
+                {"timestamp": "20260427-153012", "entries": [{"x": 1}]}
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            tui, "list_backups", lambda _root=None: [(bdir.name, bdir)]
+        )
+        captured: dict = {}
+        self._stub_select(
+            monkeypatch, return_value="20260427-153012", capture=captured
+        )
+
+        result = tui.run_interactive_rollback()
+        assert result == "20260427-153012"
+        assert len(captured["choices"]) == 1
+        title = captured["choices"][0].title
+        assert "2026-04-27 15:30:12" in title
+        assert "1 item" in title
+
+    def test_cancel_returns_none(self, monkeypatch, tmp_path: Path):
+        self._silence_chrome(monkeypatch)
+        bdir = tmp_path / "20260427-153012"
+        bdir.mkdir()
+        (bdir / "manifest.json").write_text(
+            json.dumps({"timestamp": "20260427-153012", "entries": []}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            tui, "list_backups", lambda _root=None: [(bdir.name, bdir)]
+        )
+        self._stub_select(monkeypatch, return_value=None)
+        assert tui.run_interactive_rollback() is None
+
+    def test_unreadable_manifest_renders_unreadable_label(
+        self, monkeypatch, tmp_path: Path
+    ):
+        self._silence_chrome(monkeypatch)
+        bdir = tmp_path / "20260427-153012"
+        bdir.mkdir()
+        (bdir / "manifest.json").write_text("not json", encoding="utf-8")
+        monkeypatch.setattr(
+            tui, "list_backups", lambda _root=None: [(bdir.name, bdir)]
+        )
+        captured: dict = {}
+        self._stub_select(
+            monkeypatch, return_value="20260427-153012", capture=captured
+        )
+
+        tui.run_interactive_rollback()
+        assert "[unreadable]" in captured["choices"][0].title
+
+
+class TestRunInteractiveDoctor:
+    def test_delegates_to_pick_project_without_wizard_step(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """Doctor is a one-shot flow — Step 1/3 banner must be suppressed."""
+        monkeypatch.setattr(tui, "_show_banner", lambda: None)
+        monkeypatch.setattr(tui, "_solo_banner", lambda *_a, **_k: None)
+        captured: dict = {}
+
+        def fake_pick(
+            projects_dir,
+            *,
+            wizard_step=1,
+            title=None,
+            prompt=None,
+            exclude_unknown=False,
+        ):
+            captured["projects_dir"] = projects_dir
+            captured["wizard_step"] = wizard_step
+            captured["prompt"] = prompt
+            captured["exclude_unknown"] = exclude_unknown
+            return "/picked/path"
+
+        monkeypatch.setattr(tui, "pick_project", fake_pick)
+        result = tui.run_interactive_doctor(tmp_path)
+        assert result == "/picked/path"
+        assert captured["projects_dir"] == tmp_path
+        assert captured["wizard_step"] is None
+        assert "diagnose" in captured["prompt"].lower()
+        # exclude_unknown=True so the synthetic "<unknown: ...>" placeholder
+        # never reaches MigrationContext as if it were a real path.
+        assert captured["exclude_unknown"] is True

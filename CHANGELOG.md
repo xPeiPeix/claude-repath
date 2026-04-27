@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interactive pickers for `rollback` and `doctor`.** Both commands
+  previously hard-required a positional argument — `rollback <timestamp>`
+  meant copy-pasting the encoded folder name from `list-backups`, and
+  `doctor <path>` required typing the absolute project path. Running
+  either command with no argument now launches a TUI picker (matches
+  the `move` no-args behaviour shipped in v0.3.0).
+  - `rollback`'s picker lists every directory under
+    `~/.claude/.repath-backups/` newest-first, each entry annotated with
+    a humanized date (`2026-04-27 15:30:12`) parsed from the directory
+    name's `YYYYMMDD-HHMMSS` prefix, plus the manifest's entry count
+    (`1 item`, `12 items`, or `[unreadable]` for corrupted manifests so
+    the picker doesn't crash on a malformed backup directory).
+    Collision suffixes like `20260427-153012-2` render as
+    `2026-04-27 15:30:12 (#2)`.
+  - `doctor`'s picker reuses the existing project picker from `move`
+    (status filter → orphan detection → conflict markers) but suppresses
+    the `Step 1/3` wizard banner (doctor is a one-shot diagnostic, not a
+    multi-step flow) and retitles the prompt as
+    "Which project do you want to diagnose?".
+  - New public TUI entrypoints: `run_interactive_rollback()` and
+    `run_interactive_doctor()`. `pick_project` gains keyword-only
+    `wizard_step: int | None = 1`, `title`, and `prompt` parameters so
+    non-wizard callers can opt out of the step banner without forking
+    the picker.
+- **Shell-completion install.** `add_completion=True` on the Typer app
+  exposes `claude-repath --install-completion` (writes the appropriate
+  completion script into the user's shell rc file — bash / zsh / fish /
+  PowerShell auto-detected) and `claude-repath --show-completion` (dumps
+  the script to stdout for manual inspection or sourcing). Coexists with
+  the existing `--version` callback on the same root callback.
+- 16 new pytest cases (225 total, up from 209): `_humanize_backup_ts`
+  parsing across canonical / collision / multi-segment / invalid /
+  date-overflow / single-segment shapes; `_read_manifest_entry_count`
+  failure modes (missing / malformed JSON / wrong type) returning
+  `None` so the picker degrades gracefully; `run_interactive_rollback`
+  empty / pick / cancel / unreadable-manifest dispatch;
+  `run_interactive_doctor` delegates with `wizard_step=None` and a
+  retitled prompt.
+
 ## [0.9.2] — 2026-04-27
 
 ### Fixed

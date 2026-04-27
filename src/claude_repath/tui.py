@@ -567,6 +567,7 @@ def pick_project(
     wizard_step: int | None = 1,
     title: str = "Pick a project to migrate",
     prompt: str = "Which project do you want to relocate?",
+    exclude_unknown: bool = False,
 ) -> str | None:
     """Two-stage pick — select a status bucket, then a project.
 
@@ -586,11 +587,20 @@ def pick_project(
     still defaults to step 1. ``title`` lets non-move callers retitle the
     prompt without forking the picker.
 
+    ``exclude_unknown`` filters out ``<unknown: ...>`` placeholder rows
+    (rows whose cwd could not be parsed from any session ``.jsonl``).
+    ``move`` keeps them visible by default so users can spot encoded
+    folders that lost their cwd; ``doctor`` sets this to ``True`` because
+    feeding the placeholder string back into ``MigrationContext`` as if
+    it were a real path produces nonsensical diagnostics.
+
     Returns the selected project's cwd, or ``None`` on cancel.
     """
     if wizard_step is not None:
         _step_banner(wizard_step, title)
     entries = discover_projects(projects_dir)
+    if exclude_unknown:
+        entries = [e for e in entries if not e[1].startswith("<unknown")]
     if not entries:
         _notify(f"No projects found under {projects_dir}")
         return None
@@ -919,14 +929,20 @@ def _humanize_backup_ts(ts: str) -> str:
 def _read_manifest_entry_count(backup_dir: Path) -> int | None:
     """Return entry count from a backup manifest, or ``None`` on parse failure.
 
-    All failure modes (manifest missing, malformed JSON, ``entries`` not a
-    list) collapse to ``None`` so the picker renders ``[unreadable]``
-    instead of crashing on a corrupted backup directory.
+    All failure modes (manifest missing, malformed JSON, root not a JSON
+    object, ``entries`` not a list) collapse to ``None`` so the picker
+    renders ``[unreadable]`` instead of crashing on a corrupted backup
+    directory. The ``isinstance(data, dict)`` guard matters: ``json.loads``
+    accepts ``[]``, ``"string"``, and bare numbers as valid root types,
+    and a bare ``data.get("entries")`` would raise ``AttributeError`` on
+    those — aborting the entire rollback picker because of one bad backup.
     """
     manifest = backup_dir / MANIFEST_NAME
     try:
         data = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
         return None
     entries = data.get("entries")
     if not isinstance(entries, list):
@@ -989,4 +1005,5 @@ def run_interactive_doctor(projects_dir: Path) -> str | None:
         projects_dir,
         wizard_step=None,
         prompt="Which project do you want to diagnose?",
+        exclude_unknown=True,
     )

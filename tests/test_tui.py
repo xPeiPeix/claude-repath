@@ -1093,6 +1093,62 @@ class TestPickProject:
         assert filter_calls["count"] == 2  # re-entered filter after Esc
         assert result == "picked_cwd"
 
+    def test_exclude_unknown_filters_out_unknown_entries(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """``exclude_unknown=True`` drops ``<unknown: ...>`` placeholder rows.
+
+        Doctor uses this to avoid feeding the picker's synthetic placeholder
+        back into ``MigrationContext`` as if it were a real path.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        real = tmp_path / "real"
+        real.mkdir()
+        enc_active = projects / "D--active"
+        enc_active.mkdir()
+        (enc_active / "s.jsonl").write_text(
+            json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+        )
+        # Unknown: jsonl has no cwd field anywhere — discover_projects stamps
+        # it as "<unknown: D--unknown>".
+        enc_unknown = projects / "D--unknown"
+        enc_unknown.mkdir()
+        (enc_unknown / "s.jsonl").write_text(
+            json.dumps({"no_cwd_here": True}) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "all")
+        captured = self._stub_select(monkeypatch, return_value="picked")
+
+        tui.pick_project(projects, exclude_unknown=True)
+        assert captured["choices_seen"] == 1  # only the resolved active row
+
+    def test_unknown_visible_by_default(self, monkeypatch, tmp_path: Path):
+        """Default ``exclude_unknown=False`` keeps unknown rows visible.
+
+        Regression guard: ``move``'s wizard still shows unknown rows so
+        users can spot encoded folders whose cwd parsing failed.
+        """
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        real = tmp_path / "real"
+        real.mkdir()
+        enc_active = projects / "D--active"
+        enc_active.mkdir()
+        (enc_active / "s.jsonl").write_text(
+            json.dumps({"cwd": str(real)}) + "\n", encoding="utf-8"
+        )
+        enc_unknown = projects / "D--unknown"
+        enc_unknown.mkdir()
+        (enc_unknown / "s.jsonl").write_text(
+            json.dumps({"no_cwd_here": True}) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(tui, "_pick_status_filter", lambda _b: "all")
+        captured = self._stub_select(monkeypatch, return_value="picked")
+
+        tui.pick_project(projects)
+        assert captured["choices_seen"] == 2  # both rows offered
+
 
 class TestAskWithBack:
     """Exception-to-sentinel translation used by the Esc key binding.
@@ -1269,6 +1325,32 @@ class TestReadManifestEntryCount:
         )
         assert tui._read_manifest_entry_count(tmp_path) is None
 
+    def test_no_entries_key_returns_none(self, tmp_path: Path):
+        """``{}`` manifest with no ``entries`` key falls through to ``None``."""
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_non_dict_root_returns_none(self, tmp_path: Path):
+        """JSON list root must not crash on ``data.get('entries')``.
+
+        Without the ``isinstance(data, dict)`` guard this raises
+        ``AttributeError`` and aborts the whole rollback picker — one bad
+        manifest poisons every entry. Pinned regression invariant.
+        """
+        (tmp_path / "manifest.json").write_text(
+            json.dumps([1, 2, 3]), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_scalar_root_returns_none(self, tmp_path: Path):
+        """JSON scalar root (string / number) — same ``data.get`` trap."""
+        (tmp_path / "manifest.json").write_text(
+            json.dumps("just a string"), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
 
 class TestRunInteractiveRollback:
     """Pinned invariants for the rollback picker (TUI glue, not real prompts)."""
@@ -1369,10 +1451,18 @@ class TestRunInteractiveDoctor:
         monkeypatch.setattr(tui, "_solo_banner", lambda *_a, **_k: None)
         captured: dict = {}
 
-        def fake_pick(projects_dir, *, wizard_step=1, title=None, prompt=None):
+        def fake_pick(
+            projects_dir,
+            *,
+            wizard_step=1,
+            title=None,
+            prompt=None,
+            exclude_unknown=False,
+        ):
             captured["projects_dir"] = projects_dir
             captured["wizard_step"] = wizard_step
             captured["prompt"] = prompt
+            captured["exclude_unknown"] = exclude_unknown
             return "/picked/path"
 
         monkeypatch.setattr(tui, "pick_project", fake_pick)
@@ -1381,3 +1471,6 @@ class TestRunInteractiveDoctor:
         assert captured["projects_dir"] == tmp_path
         assert captured["wizard_step"] is None
         assert "diagnose" in captured["prompt"].lower()
+        # exclude_unknown=True so the synthetic "<unknown: ...>" placeholder
+        # never reaches MigrationContext as if it were a real path.
+        assert captured["exclude_unknown"] is True

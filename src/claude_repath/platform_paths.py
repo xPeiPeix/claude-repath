@@ -1,8 +1,8 @@
 """Cross-platform path helpers for detecting Claude Code Desktop artifacts.
 
 These are purely read-only — ``claude-repath`` does not migrate Desktop
-state in v0.2 (see README roadmap). The helpers exist so ``doctor`` can
-truthfully report which state locations are present on the user's machine.
+state. The helpers exist so ``doctor`` can truthfully report which state
+locations are present on the user's machine.
 """
 
 from __future__ import annotations

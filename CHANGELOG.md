@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-04-28
+
+First **stable release** — graduates the project out of `0.x` after a year
+of API stabilization. No breaking changes from `0.9.2`; the `1.0.0` jump
+signals API maturity (CLI flags, public functions in `claude_repath.tui`,
+backup manifest schema, and exit-code semantics are now considered
+stable and will follow SemVer going forward).
+
 ### Added
 
 - **Interactive pickers for `rollback` and `doctor`.** Both commands
@@ -25,28 +33,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `2026-04-27 15:30:12 (#2)`.
   - `doctor`'s picker reuses the existing project picker from `move`
     (status filter → orphan detection → conflict markers) but suppresses
-    the `Step 1/3` wizard banner (doctor is a one-shot diagnostic, not a
-    multi-step flow) and retitles the prompt as
-    "Which project do you want to diagnose?".
+    the `Step 1/3` wizard banner (doctor is a one-shot diagnostic, not
+    a multi-step flow), retitles the prompt as "Which project do you
+    want to diagnose?", and filters out `<unknown: ...>` placeholder
+    rows (cwd-unparseable encoded folders) so the synthetic string
+    never reaches `MigrationContext` as if it were a real path.
   - New public TUI entrypoints: `run_interactive_rollback()` and
     `run_interactive_doctor()`. `pick_project` gains keyword-only
-    `wizard_step: int | None = 1`, `title`, and `prompt` parameters so
-    non-wizard callers can opt out of the step banner without forking
-    the picker.
+    `wizard_step: int | None = 1`, `title`, `prompt`, and
+    `exclude_unknown: bool = False` parameters so non-wizard callers
+    can opt out of the step banner / retitle the prompt / drop unknown
+    placeholders without forking the picker.
 - **Shell-completion install.** `add_completion=True` on the Typer app
   exposes `claude-repath --install-completion` (writes the appropriate
   completion script into the user's shell rc file — bash / zsh / fish /
   PowerShell auto-detected) and `claude-repath --show-completion` (dumps
   the script to stdout for manual inspection or sourcing). Coexists with
   the existing `--version` callback on the same root callback.
-- 16 new pytest cases (225 total, up from 209): `_humanize_backup_ts`
+- **End-to-end CLI smoke tests** in new `tests/test_cli.py` (8 cases
+  via `typer.testing.CliRunner`): `--version` matches `__version__`
+  (regression guard for v0.5.1's "PyPI right but `--version` wrong"
+  four-version-locations drift), `doctor <path>` / `rollback <timestamp>`
+  parsing with explicit args after the `Argument(None, ...)` change,
+  `--help` lists positional args as optional `[PATH]` / `[TIMESTAMP]`,
+  `list` / `list-backups` no-op cleanly when home is empty,
+  `--show-completion bash` produces a valid bash completion definition.
+- 30 new pytest cases (239 total, up from 209): `_humanize_backup_ts`
   parsing across canonical / collision / multi-segment / invalid /
   date-overflow / single-segment shapes; `_read_manifest_entry_count`
-  failure modes (missing / malformed JSON / wrong type) returning
-  `None` so the picker degrades gracefully; `run_interactive_rollback`
-  empty / pick / cancel / unreadable-manifest dispatch;
-  `run_interactive_doctor` delegates with `wizard_step=None` and a
-  retitled prompt.
+  failure modes (missing manifest / malformed JSON / `entries` not a
+  list / no `entries` key / non-dict root / scalar root / non-UTF-8
+  bytes); `run_interactive_rollback` empty / pick / cancel /
+  unreadable-manifest dispatch; `run_interactive_doctor` delegation
+  including `exclude_unknown=True` forwarding; `pick_project` with
+  `exclude_unknown` filter (filtered + default-visibility regression
+  guard); 8 typer-CliRunner integration cases.
+
+### Fixed
+
+- **`_read_manifest_entry_count` no longer aborts the rollback picker
+  on bad manifest payloads.** Three corruption modes were previously
+  unhandled, and a single bad backup would propagate `AttributeError`
+  or `UnicodeDecodeError` up through `run_interactive_rollback`,
+  hiding every other backup from the user:
+  - `json.loads` accepts `[]`, `"string"`, and bare numbers as valid
+    JSON roots; `data.get("entries")` raised `AttributeError` on those.
+    Now guarded by `isinstance(data, dict)` before the `.get` call.
+  - `Path.read_text(encoding="utf-8")` raises `UnicodeDecodeError`
+    (a `ValueError` subclass — *not* an `OSError`) on non-UTF-8 byte
+    sequences. Added explicitly to the `except` tuple alongside
+    `OSError` and `JSONDecodeError`.
+  - The `entries` key being absent (manifest is `{}`) was already
+    handled correctly via the `not isinstance(entries, list)` guard,
+    but had no test pinning that behaviour. Now covered.
+
+### Changed
+
+- **Roadmap simplified.** The "v0.5+ (backlog)" entry has been removed
+  from the README Roadmap; its previously-tracked items are either
+  shipped (interactive TUI for `rollback` / `doctor`, shell-completion
+  auto-install) or now explicitly out of scope (Chromium leveldb
+  auto-migration — Anthropic's schema is private and shifts between
+  Desktop releases, so any auto-migration would be brittle to maintain;
+  Windows `handle.exe` fallback — v0.4.1's atomic-rename bottoms out
+  the recoverable failure modes already, the marginal coverage doesn't
+  justify the EULA / external-dependency cost). The README "What gets
+  migrated" table reuses the existing `🔍 diagnosed` legend (also
+  applied to Desktop state in the Platform support table) for layer 9.
 
 ## [0.9.2] — 2026-04-27
 
@@ -710,7 +763,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.2...v1.0.0
 [0.9.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.2...v0.9.0

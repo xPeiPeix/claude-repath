@@ -108,7 +108,7 @@ All three platforms work identically, with state under `~/.claude/`:
 | macOS | Standard `~/.claude/` path. |
 | Linux | Standard `~/.claude/` path. |
 
-Claude Code **Desktop** stores additional state in Chromium `Local Storage/leveldb`. `claude-repath doctor` reports whether this exists on the user's machine but does **not** auto-migrate it (v0.4+ backlog). If the user relies on Desktop, advise them to open the new folder via Desktop's File menu after migration to re-register it.
+Claude Code **Desktop** stores additional state in Chromium `Local Storage/leveldb`. `claude-repath doctor` reports whether this exists on the user's machine but does **not** auto-migrate it (out of scope — Anthropic's leveldb schema is private and shifts between Desktop releases). If the user relies on Desktop, advise them to open the new folder via Desktop's File menu after migration to re-register it.
 
 ## What gets migrated
 

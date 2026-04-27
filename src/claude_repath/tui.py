@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pyfiglet
@@ -26,6 +27,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import __version__
+from .backup import MANIFEST_NAME, list_backups
 from .layers.base import MigrationContext
 from .migrate import PlanReport, plan_migration
 
@@ -559,8 +561,14 @@ def _choice_title(
     return segments
 
 
-def pick_project(projects_dir: Path) -> str | None:
-    """Step 1/3: two-stage pick — select a status bucket, then a project.
+def pick_project(
+    projects_dir: Path,
+    *,
+    wizard_step: int | None = 1,
+    title: str = "Pick a project to migrate",
+    prompt: str = "Which project do you want to relocate?",
+) -> str | None:
+    """Two-stage pick — select a status bucket, then a project.
 
     Step 1a shows a compact menu counting each status bucket
     (active / orphan / empty / unknown / all). The cursor defaults to
@@ -572,9 +580,16 @@ def pick_project(projects_dir: Path) -> str | None:
     user realizes they picked the wrong status bucket and wants to widen
     or switch categories without Ctrl+C-ing out of the flow.
 
+    ``wizard_step`` controls the optional Rich step-banner header.
+    Passing ``None`` (used by ``doctor`` and other one-shot flows that
+    aren't multi-step wizards) suppresses the banner; ``move``'s wizard
+    still defaults to step 1. ``title`` lets non-move callers retitle the
+    prompt without forking the picker.
+
     Returns the selected project's cwd, or ``None`` on cancel.
     """
-    _step_banner(1, "Pick a project to migrate")
+    if wizard_step is not None:
+        _step_banner(wizard_step, title)
     entries = discover_projects(projects_dir)
     if not entries:
         _notify(f"No projects found under {projects_dir}")
@@ -626,7 +641,7 @@ def pick_project(projects_dir: Path) -> str | None:
         )
         result = _ask_with_back(
             questionary.select(
-                "Which project do you want to relocate?",
+                prompt,
                 choices=choices,
             )
         )
@@ -859,3 +874,119 @@ def run_interactive_move(
             continue
         # action == "proceed"
         return old, new
+
+
+def _solo_banner(title: str, subtitle: str | None = None, icon: str = "") -> None:
+    """Print a one-shot banner panel without ``Step X/N`` framing.
+
+    Used for non-wizard flows (``doctor`` / ``rollback``) where the
+    multi-step header would be misleading. Mirrors :func:`_step_banner`'s
+    visual language (cyan-bordered Rich Panel) so wizard and one-shot
+    flows feel like the same product, just without the step number.
+    """
+    heading = f"{icon}  {title}" if icon else title
+    body = f"[bold]{heading}[/bold]"
+    if subtitle:
+        body += f"\n[dim]{subtitle}[/dim]"
+    _console.print(Panel(body, border_style="cyan", expand=False))
+
+
+def _humanize_backup_ts(ts: str) -> str:
+    """Render a backup timestamp as a human-readable date.
+
+    Backup directories are named ``time.strftime("%Y%m%d-%H%M%S")`` by
+    :func:`backup.start_backup`, with an optional ``-N`` suffix when two
+    backups land in the same wall-clock second. The canonical
+    ``YYYYMMDD-HHMMSS`` prefix becomes ``YYYY-MM-DD HH:MM:SS``;
+    collision suffixes append as ``(#N)``. Anything that fails to match
+    the expected shape (externally-created dir, future-format change) is
+    returned verbatim so the picker still surfaces it.
+    """
+    parts = ts.split("-")
+    if len(parts) >= 2 and len(parts[0]) == 8 and len(parts[1]) == 6:
+        try:
+            dt = datetime.strptime(f"{parts[0]}{parts[1]}", "%Y%m%d%H%M%S")
+            base = dt.strftime("%Y-%m-%d %H:%M:%S")
+            extras = parts[2:]
+            if extras:
+                return f"{base} (#{'-'.join(extras)})"
+            return base
+        except ValueError:
+            pass
+    return ts
+
+
+def _read_manifest_entry_count(backup_dir: Path) -> int | None:
+    """Return entry count from a backup manifest, or ``None`` on parse failure.
+
+    All failure modes (manifest missing, malformed JSON, ``entries`` not a
+    list) collapse to ``None`` so the picker renders ``[unreadable]``
+    instead of crashing on a corrupted backup directory.
+    """
+    manifest = backup_dir / MANIFEST_NAME
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return None
+    return len(entries)
+
+
+def run_interactive_rollback(root: Path | None = None) -> str | None:
+    """One-shot picker over available migration backups.
+
+    Lists every directory under ``~/.claude/.repath-backups/`` newest-first
+    (per :func:`backup.list_backups`), each annotated with a humanized
+    date plus the manifest's entry count so users can tell apart a no-op
+    stub from a real multi-layer migration. Returns the chosen timestamp
+    string (the same value :func:`backup.rollback` accepts), or ``None``
+    on cancel.
+
+    Single-step flow — Esc and Ctrl+C both mean cancel because there is
+    no previous step to rewind to.
+    """
+    backups = list_backups(root)
+    if not backups:
+        _notify("No backups found. (Run a `move` or `rewire` first.)")
+        return None
+
+    _show_banner()
+    _solo_banner("Pick a backup to roll back to", icon="↩️")
+    _help_bar([("↑↓", "navigate"), ("Enter", "select"), ("Ctrl+C", "cancel")])
+
+    choices: list[questionary.Choice] = []
+    for ts, path in backups:
+        readable = _humanize_backup_ts(ts)
+        n_entries = _read_manifest_entry_count(path)
+        if n_entries is None:
+            count_label = "[unreadable]"
+        else:
+            count_label = f"{n_entries} item{'s' if n_entries != 1 else ''}"
+        title = f"📦  {readable}  [{count_label}]"
+        choices.append(questionary.Choice(title=title, value=ts))
+
+    result = _ask_with_back(
+        questionary.select("Which backup?", choices=choices)
+    )
+    if result == _BACK or not result:
+        return None
+    return result
+
+
+def run_interactive_doctor(projects_dir: Path) -> str | None:
+    """One-shot project picker for ``doctor``.
+
+    Reuses :func:`pick_project` but suppresses its ``Step 1/3`` wizard
+    banner — doctor is a one-shot diagnostic, not a multi-step flow,
+    so the wizard chrome would be misleading. A solo banner plus a
+    retitled menu prompt keep the doctor context obvious.
+    """
+    _show_banner()
+    _solo_banner("Pick a project to diagnose", icon="🩺")
+    return pick_project(
+        projects_dir,
+        wizard_step=None,
+        prompt="Which project do you want to diagnose?",
+    )

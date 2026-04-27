@@ -26,7 +26,7 @@ app = typer.Typer(
     help="Rewire Claude Code state when your project folder moves.",
     no_args_is_help=True,
     context_settings={"help_option_names": ["-h", "--help"]},
-    add_completion=False,
+    add_completion=True,
 )
 console = Console()
 
@@ -315,9 +315,21 @@ def rewire_cmd(
 
 @app.command("doctor")
 def doctor_cmd(
-    path: str = typer.Argument(..., help="Absolute path of project to check"),
+    path: str = typer.Argument(None, help="Absolute path of project to check"),
 ) -> None:
-    """Diagnose the health of a project's Claude Code state."""
+    """Diagnose the health of a project's Claude Code state.
+
+    Run without arguments to launch an interactive project picker (TUI).
+    """
+    if path is None:
+        from .tui import run_interactive_doctor
+        default_projects = Path.home() / ".claude" / "projects"
+        chosen = run_interactive_doctor(default_projects)
+        if chosen is None:
+            console.print("[yellow]cancelled[/yellow]")
+            raise typer.Abort()
+        path = chosen
+
     ctx = MigrationContext(old_path=path, new_path=path)
     enc = encode_path(path)
     table = Table(title=f"Doctor: {path}", show_header=True)
@@ -393,10 +405,21 @@ def list_cmd() -> None:
 
 @app.command("rollback")
 def rollback_cmd(
-    timestamp: str = typer.Argument(..., help="Backup timestamp (see `list-backups`)"),
+    timestamp: str = typer.Argument(None, help="Backup timestamp (see `list-backups`)"),
     yes: bool = typer.Option(False, "--yes", "-y"),
 ) -> None:
-    """Restore a previous migration's backup."""
+    """Restore a previous migration's backup.
+
+    Run without arguments to launch an interactive backup picker (TUI).
+    """
+    if timestamp is None:
+        from .tui import run_interactive_rollback
+        chosen = run_interactive_rollback()
+        if chosen is None:
+            console.print("[yellow]cancelled[/yellow]")
+            raise typer.Abort()
+        timestamp = chosen
+
     if not yes and not typer.confirm(f"Rollback to backup {timestamp}?"):
         raise typer.Abort()
     count = rollback(timestamp)

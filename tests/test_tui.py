@@ -1213,3 +1213,171 @@ class TestErasePrevLines:
         tui._erase_prev_lines(2)
         captured = capsys.readouterr()
         assert captured.err == ""
+
+
+class TestHumanizeBackupTs:
+    def test_canonical_timestamp(self):
+        assert tui._humanize_backup_ts("20260427-153012") == "2026-04-27 15:30:12"
+
+    def test_collision_suffix_appended(self):
+        assert (
+            tui._humanize_backup_ts("20260427-153012-2")
+            == "2026-04-27 15:30:12 (#2)"
+        )
+
+    def test_multi_segment_suffix_joined(self):
+        assert (
+            tui._humanize_backup_ts("20260427-153012-2-3")
+            == "2026-04-27 15:30:12 (#2-3)"
+        )
+
+    def test_invalid_timestamp_returned_verbatim(self):
+        assert tui._humanize_backup_ts("not-a-timestamp") == "not-a-timestamp"
+
+    def test_unparseable_date_returned_verbatim(self):
+        # Looks like the right shape but fails strptime — return as-is so
+        # the picker still surfaces the directory.
+        assert tui._humanize_backup_ts("99999999-999999") == "99999999-999999"
+
+    def test_single_segment_returned_verbatim(self):
+        assert tui._humanize_backup_ts("20260427") == "20260427"
+
+
+class TestReadManifestEntryCount:
+    def test_valid_manifest_returns_count(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"entries": [{"x": 1}, {"y": 2}]}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) == 2
+
+    def test_empty_entries_returns_zero(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"entries": []}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) == 0
+
+    def test_missing_manifest_returns_none(self, tmp_path: Path):
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_malformed_json_returns_none(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text("not json", encoding="utf-8")
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+    def test_entries_not_list_returns_none(self, tmp_path: Path):
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"entries": "oops"}), encoding="utf-8"
+        )
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
+
+class TestRunInteractiveRollback:
+    """Pinned invariants for the rollback picker (TUI glue, not real prompts)."""
+
+    @staticmethod
+    def _silence_chrome(monkeypatch):
+        """Mute the visual chrome (banners + help bar) so tests focus on dispatch."""
+        monkeypatch.setattr(tui, "_show_banner", lambda: None)
+        monkeypatch.setattr(tui, "_solo_banner", lambda *_a, **_k: None)
+        monkeypatch.setattr(tui, "_help_bar", lambda *_a, **_k: None)
+
+    @staticmethod
+    def _stub_select(monkeypatch, return_value, capture: dict | None = None):
+        class _Sel:
+            def __init__(self, message, *, choices=None, **_k):
+                if capture is not None:
+                    capture["message"] = message
+                    capture["choices"] = list(choices or [])
+
+            def ask(self):
+                return return_value
+
+            def unsafe_ask(self):
+                return return_value
+
+        import questionary as q
+
+        monkeypatch.setattr(q, "select", _Sel)
+
+    def test_no_backups_returns_none(self, monkeypatch):
+        monkeypatch.setattr(tui, "list_backups", lambda _root=None: [])
+        assert tui.run_interactive_rollback() is None
+
+    def test_picks_chosen_timestamp(self, monkeypatch, tmp_path: Path):
+        self._silence_chrome(monkeypatch)
+        bdir = tmp_path / "20260427-153012"
+        bdir.mkdir()
+        (bdir / "manifest.json").write_text(
+            json.dumps(
+                {"timestamp": "20260427-153012", "entries": [{"x": 1}]}
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            tui, "list_backups", lambda _root=None: [(bdir.name, bdir)]
+        )
+        captured: dict = {}
+        self._stub_select(
+            monkeypatch, return_value="20260427-153012", capture=captured
+        )
+
+        result = tui.run_interactive_rollback()
+        assert result == "20260427-153012"
+        assert len(captured["choices"]) == 1
+        title = captured["choices"][0].title
+        assert "2026-04-27 15:30:12" in title
+        assert "1 item" in title
+
+    def test_cancel_returns_none(self, monkeypatch, tmp_path: Path):
+        self._silence_chrome(monkeypatch)
+        bdir = tmp_path / "20260427-153012"
+        bdir.mkdir()
+        (bdir / "manifest.json").write_text(
+            json.dumps({"timestamp": "20260427-153012", "entries": []}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            tui, "list_backups", lambda _root=None: [(bdir.name, bdir)]
+        )
+        self._stub_select(monkeypatch, return_value=None)
+        assert tui.run_interactive_rollback() is None
+
+    def test_unreadable_manifest_renders_unreadable_label(
+        self, monkeypatch, tmp_path: Path
+    ):
+        self._silence_chrome(monkeypatch)
+        bdir = tmp_path / "20260427-153012"
+        bdir.mkdir()
+        (bdir / "manifest.json").write_text("not json", encoding="utf-8")
+        monkeypatch.setattr(
+            tui, "list_backups", lambda _root=None: [(bdir.name, bdir)]
+        )
+        captured: dict = {}
+        self._stub_select(
+            monkeypatch, return_value="20260427-153012", capture=captured
+        )
+
+        tui.run_interactive_rollback()
+        assert "[unreadable]" in captured["choices"][0].title
+
+
+class TestRunInteractiveDoctor:
+    def test_delegates_to_pick_project_without_wizard_step(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """Doctor is a one-shot flow — Step 1/3 banner must be suppressed."""
+        monkeypatch.setattr(tui, "_show_banner", lambda: None)
+        monkeypatch.setattr(tui, "_solo_banner", lambda *_a, **_k: None)
+        captured: dict = {}
+
+        def fake_pick(projects_dir, *, wizard_step=1, title=None, prompt=None):
+            captured["projects_dir"] = projects_dir
+            captured["wizard_step"] = wizard_step
+            captured["prompt"] = prompt
+            return "/picked/path"
+
+        monkeypatch.setattr(tui, "pick_project", fake_pick)
+        result = tui.run_interactive_doctor(tmp_path)
+        assert result == "/picked/path"
+        assert captured["projects_dir"] == tmp_path
+        assert captured["wizard_step"] is None
+        assert "diagnose" in captured["prompt"].lower()

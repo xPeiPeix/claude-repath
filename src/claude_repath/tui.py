@@ -929,18 +929,20 @@ def _humanize_backup_ts(ts: str) -> str:
 def _read_manifest_entry_count(backup_dir: Path) -> int | None:
     """Return entry count from a backup manifest, or ``None`` on parse failure.
 
-    All failure modes (manifest missing, malformed JSON, root not a JSON
-    object, ``entries`` not a list) collapse to ``None`` so the picker
-    renders ``[unreadable]`` instead of crashing on a corrupted backup
-    directory. The ``isinstance(data, dict)`` guard matters: ``json.loads``
-    accepts ``[]``, ``"string"``, and bare numbers as valid root types,
-    and a bare ``data.get("entries")`` would raise ``AttributeError`` on
-    those — aborting the entire rollback picker because of one bad backup.
+    All failure modes (manifest missing, non-UTF-8 bytes, malformed JSON,
+    root not a JSON object, ``entries`` not a list) collapse to ``None``
+    so the picker renders ``[unreadable]`` instead of crashing on a
+    corrupted backup directory. The ``isinstance(data, dict)`` guard
+    matters: ``json.loads`` accepts ``[]``, ``"string"``, and bare numbers
+    as valid root types, and a bare ``data.get("entries")`` would raise
+    ``AttributeError`` on those — aborting the entire rollback picker
+    because of one bad backup. ``UnicodeDecodeError`` is a ``ValueError``
+    subclass (not ``OSError``), so it must be listed explicitly.
     """
     manifest = backup_dir / MANIFEST_NAME
     try:
         data = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
         return None

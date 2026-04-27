@@ -1351,6 +1351,17 @@ class TestReadManifestEntryCount:
         )
         assert tui._read_manifest_entry_count(tmp_path) is None
 
+    def test_invalid_utf8_bytes_return_none(self, tmp_path: Path):
+        """``UnicodeDecodeError`` on non-UTF-8 bytes must collapse to ``None``.
+
+        ``Path.read_text(encoding="utf-8")`` raises ``UnicodeDecodeError``
+        (a ``ValueError`` subclass, *not* ``OSError``) on invalid byte
+        sequences. Without it in the except list, one bad manifest
+        aborts the entire rollback picker.
+        """
+        (tmp_path / "manifest.json").write_bytes(b"\xff\xfe invalid utf-8 bytes")
+        assert tui._read_manifest_entry_count(tmp_path) is None
+
 
 class TestRunInteractiveRollback:
     """Pinned invariants for the rollback picker (TUI glue, not real prompts)."""

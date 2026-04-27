@@ -13,6 +13,8 @@ rather than raising.
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,12 +53,40 @@ def find_locks_on_paths(paths: list[Path]) -> list[LockEntry]:
             continue
     if not targets:
         return []
-    entries: list[LockEntry] = []
-    for proc in psutil.process_iter(attrs=["pid", "name"]):
-        entry = _inspect_process(proc, targets)
-        if entry is not None:
-            entries.append(entry)
-    return entries
+
+    # Snapshot processes up-front, then fan out the per-process inspection to
+    # a thread pool. Windows' ``psutil.Process.open_files()`` is expensive —
+    # it enumerates every handle with a per-handle type-query and a defensive
+    # timeout to avoid hanging on exotic kernel objects. Serially iterating
+    # 200+ processes with that cost per process pushed the pre-flight check
+    # into the "looks hung" range (10-60s). These calls release the GIL on
+    # every syscall, so plain threads parallelize them cleanly.
+    #
+    # Each Process instance is accessed from exactly one worker thread via
+    # ``pool.map`` — psutil.Process has per-instance mutable state (CPU time
+    # caches, oneshot context, etc.) that isn't documented thread-safe for
+    # concurrent same-object access. Refactors that share a Process across
+    # threads (e.g. a shared work queue) must reintroduce that guarantee.
+    procs = list(psutil.process_iter(attrs=["pid", "name"]))
+    max_workers = min(32, (os.cpu_count() or 4) * 4)
+    pool = ThreadPoolExecutor(max_workers=max_workers)
+
+    def _scan_one(proc: psutil.Process) -> LockEntry | None:
+        # Named (not lambda) so any unhandled exception inside _inspect_process
+        # surfaces with a meaningful traceback frame instead of "<lambda>".
+        return _inspect_process(proc, targets)
+
+    try:
+        results = list(pool.map(_scan_one, procs))
+    finally:
+        # ``cancel_futures`` drops queued-but-not-started work immediately on
+        # Ctrl+C so we don't wait on the full ~200-process queue. In-flight
+        # workers still drain their current ``open_files()`` syscall, so the
+        # observed Ctrl+C lag is bounded by the slowest in-flight call
+        # (~1-2s on Windows) × the number of running workers (max 32) — not
+        # by the full process count.
+        pool.shutdown(wait=True, cancel_futures=True)
+    return [entry for entry in results if entry is not None]
 
 
 def find_locks_on_path(path: Path) -> list[LockEntry]:
@@ -75,7 +105,11 @@ def _inspect_process(
     """Return a ``LockEntry`` if ``proc`` holds anything under any ``target``."""
     try:
         info = proc.info
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+        # OSError mirrors the cwd / open_files clauses below — under heavy
+        # ``/proc`` contention on Linux ``proc.info``'s oneshot lookup can
+        # surface a transient OSError that would otherwise abort the entire
+        # parallel scan via pool.map.
         return None
     pid = info.get("pid")
     name = info.get("name") or "?"
@@ -83,7 +117,12 @@ def _inspect_process(
     # 1) cwd check — the most common lock source on Windows (shell cd'd in)
     try:
         cwd = proc.cwd()
-    except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+    except (
+        psutil.AccessDenied,
+        psutil.NoSuchProcess,
+        psutil.ZombieProcess,  # subclass of NoSuchProcess; explicit for clarity
+        OSError,
+    ):
         cwd = None
     if cwd:
         try:
@@ -98,7 +137,12 @@ def _inspect_process(
     # 2) open_files check — IDEs and editors
     try:
         open_files = proc.open_files() or []
-    except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+    except (
+        psutil.AccessDenied,
+        psutil.NoSuchProcess,
+        psutil.ZombieProcess,  # subclass of NoSuchProcess; explicit for clarity
+        OSError,
+    ):
         open_files = []
     for of in open_files:
         try:

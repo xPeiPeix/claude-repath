@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-04-27
+
+### Fixed
+
+- **Pre-flight lock scan no longer "looks hung" on Windows.** Users
+  reported the TUI freezing for 10–60 seconds after pressing
+  ``✅ Yes, proceed`` on busy machines. Root cause:
+  ``find_locks_on_paths`` walked every running process serially and on
+  Windows ``psutil.Process.open_files()`` does a per-handle type query
+  with a defensive timeout — 200+ processes × ~100 handles each pushed
+  the scan into "looks hung" range. The scan is now parallelized with
+  ``ThreadPoolExecutor`` (``max_workers = min(32, cpu_count * 4)``);
+  ``open_files()`` releases the GIL on every syscall so plain threads
+  fan out cleanly. ``cli.py`` additionally prints a permanent
+  ``● Pre-flight lock scan`` stage marker plus a ``console.status``
+  spinner before the scan, so the user can see work is happening
+  even when the scan still takes a moment.
+- **Esc-at-name no longer stacks duplicate prompt rows.** In Step 2
+  of the wizard, repeatedly pressing Esc at the project-name prompt
+  to re-edit the parent left a growing column of finalized
+  ``? New parent directory:`` / ``? New project name:`` rows in
+  scrollback. ``prompt_new_path`` now calls a new
+  ``_erase_prev_lines(2)`` helper before re-entering the loop so
+  each iteration overwrites the prior attempt in place.
+
+### Changed
+
+- **Cross-platform robustness for the new ANSI helper and parallel
+  scan.** ``_erase_prev_lines`` writes to ``sys.stderr`` (matching
+  ``questionary`` / ``prompt_toolkit``'s default output stream); on
+  Windows it gates on ``WT_SESSION`` / ``TERM_PROGRAM`` / ``TERM`` env
+  vars **or** an explicit ``GetConsoleMode`` check for the
+  ``ENABLE_VIRTUAL_TERMINAL_PROCESSING`` bit, so legacy ``cmd.exe``
+  without VT processing skips the emit instead of rendering literal
+  ``?[F?[2K`` garbage. ``TERM=dumb`` / ``unknown`` is honored as an
+  explicit opt-out. The parallel scan's worker now catches
+  ``psutil.ZombieProcess`` (Linux/macOS) and ``OSError`` at every
+  entry point of ``_inspect_process`` (including the leading
+  ``proc.info`` access), so a single transient ``/proc`` read failure
+  can't abort the whole batch via ``pool.map``. ``shutdown(wait=True,
+  cancel_futures=True)`` keeps Ctrl+C latency bounded by the slowest
+  in-flight ``open_files()`` call instead of the full process queue.
+
 ## [0.9.1] — 2026-04-24
 
 ### Changed
@@ -626,7 +669,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward-slash paths, mixed-style tolerance, worktree discovery, and
   full-round-trip rollback.
 
-[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/xPeiPeix/claude-repath/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/xPeiPeix/claude-repath/compare/v0.8.1...v0.8.2

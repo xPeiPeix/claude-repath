@@ -1141,3 +1141,75 @@ class TestAskWithBack:
 
         with _pt.raises(RuntimeError, match="unexpected"):
             _ask_with_back(_Q())
+
+
+class TestErasePrevLines:
+    """Behavior of the cursor-up + erase-line helper used after Esc-at-name.
+
+    Pins three invariants so future refactors of the output stream / VT
+    detection don't silently corrupt the terminal:
+
+    * Non-TTY → no bytes emitted (CI logs / pipes stay clean).
+    * TTY on Linux/macOS → exactly ``n`` ``\\x1b[F\\x1b[2K`` pairs on stderr,
+      stdout untouched.
+    * TTY on Windows with neither modern-terminal env vars nor VT-enabled
+      console → silent (legacy ``cmd.exe`` would otherwise show literal
+      ``?[F?[2K`` garbage).
+    """
+
+    def _force_isatty(self, monkeypatch, *, stderr: bool, stdout: bool = False):
+        """Pin ``isatty`` for both streams — capsys's StringIO returns False."""
+        monkeypatch.setattr("sys.stderr.isatty", lambda: stderr, raising=False)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: stdout, raising=False)
+
+    def test_silent_when_stderr_not_tty(self, monkeypatch, capsys):
+        self._force_isatty(monkeypatch, stderr=False)
+        tui._erase_prev_lines(2)
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert captured.out == ""
+
+    def test_emits_ansi_to_stderr_when_tty_non_windows(self, monkeypatch, capsys):
+        self._force_isatty(monkeypatch, stderr=True)
+        monkeypatch.setattr("sys.platform", "linux")
+        tui._erase_prev_lines(2)
+        captured = capsys.readouterr()
+        assert captured.err == "\x1b[F\x1b[2K\x1b[F\x1b[2K"
+        assert captured.out == ""  # never touch stdout — spinner lives there
+
+    def test_silent_on_legacy_windows_cmd(self, monkeypatch, capsys):
+        """No env-var hint + no VT bit → must skip emit (would garble cmd.exe)."""
+        self._force_isatty(monkeypatch, stderr=True)
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(tui, "_windows_stderr_vt_enabled", lambda: False)
+        for var in ("WT_SESSION", "TERM_PROGRAM", "TERM"):
+            monkeypatch.delenv(var, raising=False)
+        tui._erase_prev_lines(2)
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
+    def test_emits_on_windows_terminal_via_env_var(self, monkeypatch, capsys):
+        """``WT_SESSION`` is the canonical Windows Terminal hint — fast-path."""
+        self._force_isatty(monkeypatch, stderr=True)
+        monkeypatch.setattr("sys.platform", "win32")
+        # VT API call would fail on test runner; force False so we know the
+        # env-var path is what authorized the emit.
+        monkeypatch.setattr(tui, "_windows_stderr_vt_enabled", lambda: False)
+        for var in ("TERM_PROGRAM", "TERM"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("WT_SESSION", "fake-session-guid")
+        tui._erase_prev_lines(2)
+        captured = capsys.readouterr()
+        assert captured.err == "\x1b[F\x1b[2K\x1b[F\x1b[2K"
+
+    def test_silent_when_term_is_dumb(self, monkeypatch, capsys):
+        """``TERM=dumb`` is the explicit opt-out signal — must be respected."""
+        self._force_isatty(monkeypatch, stderr=True)
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(tui, "_windows_stderr_vt_enabled", lambda: False)
+        for var in ("WT_SESSION", "TERM_PROGRAM"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("TERM", "dumb")
+        tui._erase_prev_lines(2)
+        captured = capsys.readouterr()
+        assert captured.err == ""

@@ -8,7 +8,7 @@
       "name": "claude-repath",
       "source": "./",
       "description": "Migrate Claude Code state when project folders move or rename — rewires sessions, todos, memory, worktrees, and ~/.claude.json in one shot.",
-      "version": "0.9.1",
+      "version": "0.9.2",
       "category": "devtools",
       "homepage": "https://github.com/xPeiPeix/claude-repath"
     }

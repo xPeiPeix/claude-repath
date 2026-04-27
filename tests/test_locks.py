@@ -260,6 +260,84 @@ class TestFindLocksOnPaths:
         assert [e.pid for e in via_single] == [e.pid for e in via_multi] == [9]
 
 
+class TestParallelScanResilience:
+    """One bad process must not poison the whole batch.
+
+    The serial v0.9.1 implementation handled this implicitly — an exception
+    skipped that one process and the next iteration proceeded. After the
+    parallel rewrite a single uncaught exception inside the worker lambda
+    surfaces during ``pool.map`` consumption and aborts the whole scan,
+    losing every other process's result. These tests pin the exception
+    classes that ``_inspect_process`` must absorb so a future refactor
+    doesn't quietly reintroduce that failure mode.
+    """
+
+    def test_oserror_in_cwd_does_not_abort_scan(self, tmp_path, patch_process_iter):
+        """``proc.cwd()`` raising ``OSError`` from one worker must not lose
+        results from other workers in the same batch."""
+        target = tmp_path / "proj"
+        target.mkdir()
+
+        class _OSErrorProc(_FakeProc):
+            def cwd(self):
+                raise OSError("transient /proc read failed")
+
+        patch_process_iter(
+            [
+                _OSErrorProc(pid=1, name="bad"),
+                _FakeProc(pid=2, name="bash", cwd=str(target)),
+            ]
+        )
+        result = find_locks_on_paths([target])
+        assert [e.pid for e in result] == [2]
+
+    def test_oserror_in_proc_info_does_not_abort_scan(
+        self, tmp_path, patch_process_iter
+    ):
+        """``proc.info`` raising ``OSError`` (Linux ``/proc`` contention case)
+        must be caught at the entry point of ``_inspect_process``, not
+        propagated through ``pool.map``."""
+        target = tmp_path / "proj"
+        target.mkdir()
+
+        class _InfoOSErrorProc:
+            """Minimal Process stand-in where ``info`` itself raises.
+
+            Doesn't inherit ``_FakeProc`` because that class assigns
+            ``self.info = {...}`` in ``__init__``, which collides with a
+            read-only property on the subclass.
+            """
+
+            @property
+            def info(self):
+                raise OSError("oneshot lookup transient failure")
+
+        patch_process_iter(
+            [
+                _InfoOSErrorProc(),
+                _FakeProc(pid=2, name="bash", cwd=str(target)),
+            ]
+        )
+        result = find_locks_on_paths([target])
+        assert [e.pid for e in result] == [2]
+
+    def test_zombie_process_in_cwd_does_not_abort_scan(
+        self, tmp_path, patch_process_iter
+    ):
+        """``psutil.ZombieProcess`` (Linux/macOS unreaped child) must be
+        absorbed alongside ``NoSuchProcess``."""
+        target = tmp_path / "proj"
+        target.mkdir()
+        patch_process_iter(
+            [
+                _FakeProc(pid=1, cwd_raises=psutil.ZombieProcess, open_files=[]),
+                _FakeProc(pid=2, name="bash", cwd=str(target)),
+            ]
+        )
+        result = find_locks_on_paths([target])
+        assert [e.pid for e in result] == [2]
+
+
 class TestFormatLockReport:
     def test_empty_list_returns_empty_string(self):
         assert format_lock_report([]) == ""

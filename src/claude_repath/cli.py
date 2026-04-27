@@ -101,7 +101,15 @@ def _check_preflight_locks(
     if not scanned:
         return
 
-    locks = find_locks_on_paths(scanned)
+    # Explicit stage marker — on Windows this scan can take several seconds
+    # even after the v0.9.2 parallelization because ``proc.open_files()`` does
+    # a per-handle type query. Without a marker + spinner the user sees a gap
+    # between "Yes, proceed" and the next visible step and assumes a hang.
+    console.print("[cyan]●[/cyan] Pre-flight lock scan")
+    with console.status(
+        "[dim]scanning running processes for locks...[/dim]", spinner="dots"
+    ):
+        locks = find_locks_on_paths(scanned)
     if not locks:
         return
     prefix = "[yellow]dry-run preview: [/yellow]" if dry_run else ""

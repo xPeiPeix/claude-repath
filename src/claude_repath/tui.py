@@ -15,6 +15,7 @@ real absolute path the project was opened at, captured at runtime.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -346,6 +347,83 @@ def _notify(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+# Win32 console mode flag — bit 0x0004 enables interpretation of ANSI escape
+# sequences on the attached console handle. Win10 1903+ enables it by default
+# for new conhost windows; older Windows doesn't.
+_ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+_STD_ERROR_HANDLE = -12
+
+
+def _windows_stderr_vt_enabled() -> bool:
+    """Check whether stderr's Windows console handle has VT processing on.
+
+    Returns ``False`` on any failure (closed handle, not a real console,
+    ``GetConsoleMode`` rejection) so callers treat "unknown" as "unsafe to
+    emit raw ANSI." Pseudo-terminals like mintty / Git Bash don't route
+    through the conhost API at all, so this returns ``False`` for them —
+    the env-var fast-path in :func:`_erase_prev_lines` covers that case
+    separately.
+    """
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(_STD_ERROR_HANDLE)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(mode.value & _ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    except (OSError, AttributeError, ImportError):
+        return False
+
+
+def _erase_prev_lines(n: int) -> None:
+    """Erase the last ``n`` printed lines (cursor-up + erase-to-EOL).
+
+    Questionary finalizes each prompt with a persistent transcript row
+    (``? New parent directory: D:\\dev_code``). That's useful on the forward
+    path but stacks up visually when the user reverses direction — pressing
+    Esc at the name prompt would otherwise leave every prior attempt sitting
+    in scrollback (parent + name × N). Emitting this sequence before the next
+    loop iteration lets questionary's next prompt overwrite the same rows
+    in place.
+
+    Writes to **stderr**, not stdout: questionary / prompt_toolkit route
+    their prompt UI to stderr by default (``create_output()`` picks stderr
+    when it's a TTY), so the cursor-up targets the same rows questionary
+    just advanced. Writing to stdout would corrupt the spinner / stage
+    markers whenever stderr is redirected (``... 2>log.txt``), leaving the
+    stdout stream's last bytes silently eaten by the escape codes.
+
+    Silent when stderr isn't a TTY (tests, pipes) — bare ANSI control bytes
+    leaking into captured output would pollute test assertions and piped
+    logs. On Windows, additionally gates on VT processing being enabled
+    for the stderr console handle (or a known modern terminal via
+    ``WT_SESSION`` / ``TERM_PROGRAM`` / ``TERM``) — legacy ``cmd.exe``
+    reports ``isatty() == True`` but renders raw ANSI as literal
+    ``?[F?[2K`` garbage.
+    """
+    if not sys.stderr.isatty():
+        return
+    if sys.platform == "win32":
+        # Order matters: env-var hints are checked first because mintty /
+        # Git Bash pseudo-terminals don't route through conhost — their
+        # ``GetConsoleMode`` returns 0 (failure) and ``_windows_stderr_vt_
+        # enabled()`` reports False even though they render ANSI fine.
+        # ``TERM`` rejects ``dumb`` / ``unknown`` explicitly so a user who
+        # opted out of ANSI rendering doesn't see literal ``?[F?[2K``.
+        term = os.environ.get("TERM")
+        modern_terminal = (
+            os.environ.get("WT_SESSION")
+            or os.environ.get("TERM_PROGRAM")
+            or (term and term not in ("dumb", "unknown"))
+        )
+        if not modern_terminal and not _windows_stderr_vt_enabled():
+            return
+    for _ in range(n):
+        sys.stderr.write("\x1b[F\x1b[2K")
+    sys.stderr.flush()
+
+
 # Banner gradient: top-to-bottom white → dark gray. Produces a clean
 # monochrome 3D-lit look that reads as sculpted block type (like skills.sh).
 # Rich has no native gradient, so we interpolate RGB per line and emit each
@@ -618,6 +696,11 @@ def prompt_new_path(old_path: str) -> str | None:
             )
         )
         if name_input == _BACK:
+            # Erase the two questionary transcript rows ("parent:" answer +
+            # "name:" prompt) before re-entering the loop so the next
+            # iteration re-renders in place instead of stacking a growing
+            # history of prior attempts.
+            _erase_prev_lines(2)
             continue  # Esc at name → re-enter parent (inner loop)
         if name_input is None or not name_input.strip():
             return None

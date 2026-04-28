@@ -1,5 +1,5 @@
 # =============================================================================
-# claude-repath v0.9.1 — TUI wizard demo (Linux render)
+# claude-repath v1.0.0 — TUI wizard demo (Linux render)
 #
 # Tool:      https://github.com/charmbracelet/vhs
 # Reqs:      vhs 0.11+, ttyd 1.7+, ffmpeg 4+, claude-repath (via pipx/pip --user)
@@ -9,7 +9,7 @@
 # Why Linux-shaped paths? vhs runs best on Linux (Windows has no native ttyd).
 # The CLI itself supports Windows paths first-class — see README for examples.
 #
-# v0.9.1 highlights on display:
+# v1.0.0 highlights on display (move wizard — core use case):
 #   * grayscale REPATH ASCII banner at splash
 #   * wizard-step icons (📋 / 📍 / 🚀)
 #   * Step-1a status-filter menu (active / orphan / empty / unknown / all)
@@ -18,6 +18,10 @@
 #     Proceed menu (no more double "Confirm the new location?" prompt)
 #   * explicit stage markers during migration: "● Moving project folder",
 #     "● Rewiring Claude Code state" — replaces the silent-spinner look
+#
+# v1.0.0 also ships interactive pickers for `rollback` / `doctor` and
+# `--install-completion` — not shown here to keep the splash demo tight;
+# see README "Other commands" for those flows.
 # =============================================================================
 
 Output demo.gif
@@ -46,7 +50,7 @@ Enter
 Show
 
 # ---- Intro comment ---------------------------------------------------------
-Type "# claude-repath v0.9 — relocate Claude Code projects without losing state"
+Type "# claude-repath v1.0 — relocate Claude Code projects without losing state"
 Sleep 2s
 Ctrl+U
 
@@ -81,7 +85,7 @@ Sleep 600ms
 Enter
 
 # ---- Step 3: Migration Preview (let viewers read the per-layer counts) -----
-# No separate "Confirm the new location?" menu in v0.9.1 — name input flows
+# No separate "Confirm the new location?" menu in v1.0 — name input flows
 # straight into Step 3. The Proceed menu cursor defaults to "Yes, proceed".
 Sleep 5s
 Enter
